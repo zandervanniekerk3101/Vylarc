@@ -28,3 +28,5 @@ requests
 
 # --- NEW FOR PHASE 2 ---
 elevenlabs
+
+gunicorn
