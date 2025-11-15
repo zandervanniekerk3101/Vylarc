@@ -1,0 +1,30 @@
+# Web Server
+fastapi
+uvicorn[standard]
+
+# Database & ORM
+sqlalchemy
+psycopg2-binary
+alembic
+
+# Auth & Security
+passlib[bcrypt]
+python-jose[cryptography]
+cryptography
+
+# Google APIs (Auth, Drive, Docs, Sheets, etc.)
+google-api-python-client
+google-auth-oauthlib
+google-auth-httplib2
+
+# AI Models
+openai
+google-generativeai
+
+# Utilities
+pydantic-settings
+python-dotenv
+requests
+
+# --- NEW FOR PHASE 2 ---
+elevenlabs
