@@ -31,3 +31,4 @@ elevenlabs
 
 gunicorn
 email-validator
+python-multipart
