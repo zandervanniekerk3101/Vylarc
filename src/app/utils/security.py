@@ -72,7 +72,7 @@ try:
         salt=salt,
         iterations=100_000,
     )
-    fernet_key = base6f.urlsafe_b64encode(kdf.derive(key_material))
+    fernet_key = base64.urlsafe_b64encode(kdf.derive(key_material))
     cipher_suite = Fernet(fernet_key)
     logging.info("Security cipher suite initialized successfully.")
 except Exception as e:
