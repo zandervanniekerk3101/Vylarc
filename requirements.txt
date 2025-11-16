@@ -30,3 +30,4 @@ requests
 elevenlabs
 
 gunicorn
+email-validator
