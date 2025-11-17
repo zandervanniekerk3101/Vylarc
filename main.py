@@ -21,28 +21,42 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# --- Middleware ---
+# --- MIDDLEWARE (THIS IS THE CORS FIX) ---
+
+# Define the origins that are allowed to make requests
+origins = [
+    "https://vylarc.onrender.com", # The server itself
+    "https://vylarc.com",         # Your main website
+    "http://vylarc.com",          # Your website (non-https)
+    "http://localhost",           # For local testing
+    "http://localhost:8000",      # For local testing
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins (for now)
+    allow_origins=origins, # Use our specific list
     allow_credentials=True,
-    allow_methods=["*"],  # Allow all methods
-    allow_headers=["*"],  # Allow all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
+# --- END FIX ---
+
 
 # --- Global Exception Handler ---
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled exception for {request.url}: {exc}", exc_info=True)
     # Import here to avoid circular dependency
-    from src.app.services.credit_service import CreditException
-    
-    if isinstance(exc, CreditException):
-        # Handle 402 errors specifically
-        return JSONResponse(
-            status_code=exc.status_code,
-            content={"detail": exc.detail},
-        )
+    try:
+        from src.app.services.credit_service import CreditException
+        if isinstance(exc, CreditException):
+            # Handle 402 errors specifically
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": exc.detail},
+            )
+    except ImportError:
+        pass # Handle cases where CreditException might not be defined yet
     
     return JSONResponse(
         status_code=500,

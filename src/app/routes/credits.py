@@ -1,18 +1,23 @@
 import logging
-from decimal import Decimal
-from fastapi import APIRouter, Depends, HTTPException, status, Header
+from decimal import Decimal # Import Decimal
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from sqlalchemy import select, update
-from pydantic import BaseModel  # <-- THIS IS THE FIX
 
 from src.app import dependencies, models
-from src.app.schemas import credits as credits_schema
-from src.app.schemas import core as core_schema
-from src.app.config import get_settings
+from src.app.schemas import chat as chat_schema
+from src.app.services import chat_service, elevenlabs_service
+from src.app.config import get_settings # Import settings
+from src.app.routes.credits import grant_credits_to_user # Import our new function
 
 router = APIRouter()
-settings = get_settings()
+settings = get_settings() # Load settings
 
+@router.post(
+    "/send", 
+# ... existing code ...
+)
+async def send_chat_message(
+    payload: chat_schema.ChatRequest,
 # Define the credit amounts for each SKU
 # This is the "single source of truth" for your products
 # I've included the subscription plans you just defined.
@@ -27,6 +32,61 @@ SKU_TO_CREDITS = {
     "vylarc_pro_monthly": 15000,
     "vylarc_dynamics_monthly": 50000,
 }
+
+# --- NEW REUSABLE FUNCTION ---
+def grant_credits_to_user(
+    db: Session,
+    user_id: str,
+    credits_to_add: int,
+    amount_paid: Decimal,
+    payment_method: str,
+    transaction_id: str
+) -> bool:
+    """
+    Internal function to add credits and log billing.
+    Returns True on success, raises exception on failure.
+    """
+    try:
+        logging.info(f"Granting {credits_to_add} credits to user {user_id} via {payment_method}")
+        
+        # 1. Log the billing record
+        new_record = models.BillingRecord(
+            user_id=user_id,
+            credits_added=credits_to_add,
+            amount_paid=amount_paid,
+            payment_method=payment_method,
+            transaction_id=transaction_id
+        )
+        db.add(new_record)
+        
+        # 2. Update user's credit balance (atomically)
+        credits = db.scalar(
+            select(models.UserCredits)
+            .where(models.UserCredits.user_id == user_id)
+            .with_for_update()
+        )
+        
+        if not credits:
+            db.rollback()
+            logging.error(f"Credit grant failed: User credit account not found for {user_id}")
+            return False
+
+        new_balance = credits.balance + credits_to_add
+        
+        db.execute(
+            update(models.UserCredits)
+            .where(models.UserCredits.user_id == user_id)
+            .values(balance=new_balance)
+        )
+        
+        # db.commit() will be called by the route
+        return True
+        
+    except Exception as e:
+        db.rollback()
+        logging.error(f"Failed to add credits for user {user_id}: {e}")
+        raise # Re-raise the exception to be handled by the route
+# --- END NEW FUNCTION ---
 
 
 @router.get(
@@ -65,46 +125,29 @@ async def add_credits(
     Adds credits to a user's account and logs a billing record.
     This endpoint is called by an admin panel or payment gateway.
     """
-    logging.info(f"Adding {payload.credits_added} credits to user {payload.user_id}")
-
     try:
-        # 1. Log the billing record
-        new_record = models.BillingRecord(
+        grant_success = grant_credits_to_user(
+            db=db,
             user_id=payload.user_id,
-            credits_added=payload.credits_added,
+            credits_to_add=payload.credits_added,
             amount_paid=Decimal(payload.amount_paid_decimal),
             payment_method=payload.payment_method,
             transaction_id=payload.transaction_id
         )
-        db.add(new_record)
         
-        # 2. Update the user's credit balance
-        credits = db.scalar(
-            select(models.UserCredits)
-            .where(models.UserCredits.user_id == payload.user_id)
-            .with_for_update()
-        )
-        
-        if not credits:
-            db.rollback()
-            raise HTTPException(status_code=404, detail="User credit account not found.")
+        if grant_success:
+            db.commit()
+            # Need to get the new record to return it
+            new_record = db.query(models.BillingRecord).filter(
+                models.BillingRecord.user_id == payload.user_id,
+                models.BillingRecord.transaction_id == payload.transaction_id
+            ).first()
             
-        new_balance = credits.balance + payload.credits_added
-        
-        db.execute(
-            update(models.UserCredits)
-            .where(models.UserCredits.user_id == payload.user_id)
-            .values(balance=new_balance)
-        )
-        
-        db.commit()
-        db.refresh(new_record)
-        
-        # Convert Decimal to string for JSON serialization
-        response = new_record.__dict__
-        response['amount_paid'] = str(new_record.amount_paid)
-        
-        return response
+            response = new_record.__dict__
+            response['amount_paid'] = str(new_record.amount_paid)
+            return response
+        else:
+            raise HTTPException(status_code=404, detail="User credit account not found.")
 
     except Exception as e:
         db.rollback()
@@ -170,42 +213,23 @@ async def grant_credits_from_purchase(
         # Return 200 OK so WooCommerce stops retrying for a non-Vylarc product.
         return {"message": f"SKU {payload.sku} is not a Vylarc credit product. No credits added."}
 
-    # 4. Add Credits and Log Billing Record
+    # 4. Add Credits and Log Billing Record (USING THE NEW FUNCTION)
     try:
-        logging.info(f"Adding {credits_to_add} credits to user {user.id} for SKU {payload.sku}")
-
-        # Log the billing record
-        new_record = models.BillingRecord(
+        grant_success = grant_credits_to_user(
+            db=db,
             user_id=user.id,
-            credits_added=credits_to_add,
+            credits_to_add=credits_to_add,
             amount_paid=Decimal(payload.amount_paid_decimal),
-            payment_method=payload.payment_method,
-            transaction_id=payload.order_id # Use WC Order ID as transaction ID
-        )
-        db.add(new_record)
-        
-        # Update user's credit balance (atomically)
-        credits = db.scalar(
-            select(models.UserCredits)
-            .where(models.UserCredits.user_id == user.id)
-            .with_for_update()
+            payment_method=payload.payment_method or "WooCommerce",
+            transaction_id=payload.order_id
         )
         
-        if not credits:
-            db.rollback()
+        if grant_success:
+            db.commit()
+            return {"message": f"Successfully granted {credits_to_add} credits to {payload.email}."}
+        else:
+            # This case should be covered by the user check, but as a fallback
             raise HTTPException(status_code=404, detail="User credit account not found.")
-            
-        new_balance = credits.balance + credits_to_add
-        
-        db.execute(
-            update(models.UserCredits)
-            .where(models.UserCredits.user_id == user.id)
-            .values(balance=new_balance)
-        )
-        
-        db.commit()
-        
-        return {"message": f"Successfully granted {credits_to_add} credits to {payload.email}."}
 
     except Exception as e:
         db.rollback()

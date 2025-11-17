@@ -7,23 +7,24 @@ class Settings(BaseSettings):
     """
     Loads and validates all environment variables for the application.
     """
-    # model_config = SettingsConfigDict(env_file=".env", env_file_encoding='utf-8')
-
     # Core
     DATABASE_URL: str
     PUBLIC_BASE_URL: str = "http://localhost:8000"
     
     # Security
-    ENCRYPTION_KEY: str  # 32-byte (256-bit) AES key, hex-encoded
-    FLASK_SECRET_KEY: str # Used as JWT_SECRET_KEY for signing tokens
+    ENCRYPTION_KEY: str
+    FLASK_SECRET_KEY: str 
+    WORDPRESS_SECRET_KEY: str
 
     # API Keys
     GEMINI_API_KEY: str
     OPENAI_API_KEY: str
     GOOGLE_MAPS_API_KEY: str
-
-# Secret for validating WooCommerce webhook
-    WORDPRESS_SECRET_KEY: str
+    
+    # --- THIS IS THE FIX ---
+    # Admin Backdoor Email
+    ADMIN_EMAIL: str = "admin@example.com" # Default value if not set
+    # --- END FIX ---
 
     # Google OAuth
     GOOGLE_CLIENT_ID: str

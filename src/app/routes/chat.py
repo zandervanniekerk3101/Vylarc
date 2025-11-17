@@ -1,12 +1,16 @@
 import logging
+from decimal import Decimal # Import Decimal
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from src.app import dependencies, models
 from src.app.schemas import chat as chat_schema
 from src.app.services import chat_service, elevenlabs_service
+from src.app.config import get_settings # Import settings
+from src.app.routes.credits import grant_credits_to_user # Import our new function
 
 router = APIRouter()
+settings = get_settings() # Load settings
 
 @router.post(
     "/send", 
@@ -20,12 +24,51 @@ async def send_chat_message(
 ):
     """
     Handles the main chat endpoint.
-    1. Gets a response from ChatGPT.
-    2. Saves the user message and AI response to history.
-    3. (If voice_mode=true) Generates ElevenLabs audio.
-    This route is FREE as per the Vylarc spec.
+    1. Checks for admin commands.
+    2. Gets a response from ChatGPT.
+    3. Saves history.
+    4. (If voice_mode=true) Generates ElevenLabs audio.
     """
     try:
+        # --- NEW: ADMIN COMMAND BACKDOOR ---
+        if current_user.email == settings.ADMIN_EMAIL:
+            if payload.message.startswith("/addcredits"):
+                try:
+                    parts = payload.message.split() # e.g., ["/addcredits", "1000000"]
+                    if len(parts) == 2:
+                        credits_to_add = int(parts[1])
+                        
+                        # Use our reusable function
+                        grant_success = grant_credits_to_user(
+                            db=db,
+                            user_id=current_user.id,
+                            credits_to_add=credits_to_add,
+                            amount_paid=Decimal("0.00"),
+                            payment_method="Admin Command",
+                            transaction_id=f"admin-cmd-{current_user.id}"
+                        )
+                        
+                        if grant_success:
+                            db.commit()
+                            response_text = f"ADMIN: Successfully added {credits_to_add:,} credits."
+                        else:
+                            response_text = "ADMIN: Error finding your credit account."
+
+                    else:
+                        response_text = "ADMIN: Invalid command. Use /addcredits <amount>"
+                    
+                    # Return *only* the admin response, don't save to history or call AI
+                    return chat_schema.ChatResponse(
+                        text_response=response_text,
+                        audio_base64=None
+                    )
+                
+                except Exception as e:
+                    db.rollback()
+                    return chat_schema.ChatResponse(text_response=f"ADMIN: Error: {e}", audio_base64=None)
+        # --- END ADMIN COMMAND ---
+
+
         # 1. Save user's message to chat history
         db.add(models.ChatHistory(
             user_id=current_user.id,
