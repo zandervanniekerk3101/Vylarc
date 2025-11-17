@@ -3,7 +3,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, status, Header
 from sqlalchemy.orm import Session
 from sqlalchemy import select, update
-from pydantic import BaseModel
+from pydantic import BaseModel  # This import is required
 
 from src.app import dependencies, models
 from src.app.schemas import credits as credits_schema
@@ -14,8 +14,6 @@ router = APIRouter()
 settings = get_settings()
 
 # Define the credit amounts for each SKU
-# This is the "single source of truth" for your products
-# I've included the subscription plans you just defined.
 SKU_TO_CREDITS = {
     # --- One-Time Purchase SKUs ---
     "vylarc_2000_credits": 2000,
@@ -28,7 +26,7 @@ SKU_TO_CREDITS = {
     "vylarc_dynamics_monthly": 50000,
 }
 
-# --- NEW REUSABLE FUNCTION ---
+# --- REUSABLE FUNCTION ---
 def grant_credits_to_user(
     db: Session,
     user_id: str,
@@ -112,7 +110,6 @@ async def get_credit_balance(
 )
 async def add_credits(
     payload: credits_schema.CreditAddRequest,
-    # This should be a protected route, e.g., only callable by a service role
     current_user: models.User = Depends(dependencies.get_current_user),
     db: Session = Depends(dependencies.get_db)
 ):
@@ -138,6 +135,10 @@ async def add_credits(
                 models.BillingRecord.transaction_id == payload.transaction_id
             ).first()
             
+            if not new_record:
+                 # This should be impossible, but good to check
+                 raise HTTPException(status_code=404, detail="Billing record not found after creation.")
+
             response = new_record.__dict__
             response['amount_paid'] = str(new_record.amount_paid)
             return response
@@ -194,7 +195,6 @@ async def grant_credits_from_purchase(
     
     if not user:
         logging.error(f"Purchase grant failed: User not found for email {payload.email}")
-        # We must raise an error so WooCommerce knows it failed and can retry.
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"User with email {payload.email} not found. Credits not granted. User must register on Vylarc with this email."
@@ -205,7 +205,6 @@ async def grant_credits_from_purchase(
     
     if not credits_to_add:
         logging.warning(f"Purchase grant ignored: SKU {payload.sku} is not in mapping.")
-        # Return 200 OK so WooCommerce stops retrying for a non-Vylarc product.
         return {"message": f"SKU {payload.sku} is not a Vylarc credit product. No credits added."}
 
     # 4. Add Credits and Log Billing Record (USING THE NEW FUNCTION)
@@ -223,7 +222,6 @@ async def grant_credits_from_purchase(
             db.commit()
             return {"message": f"Successfully granted {credits_to_add} credits to {payload.email}."}
         else:
-            # This case should be covered by the user check, but as a fallback
             raise HTTPException(status_code=404, detail="User credit account not found.")
 
     except Exception as e:
