@@ -1,89 +1,64 @@
-import logging
-from fastapi import Depends, HTTPException, status, Cookie
+import uuid
+from typing import Generator
+from fastapi import Depends, HTTPException, status, Request
+from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
 from src.app.database import get_db_session
 from src.app import models
 from src.app.utils import security
+from src.app.schemas import token as token_schema
 
-# --- DB SESSION ---
-def get_db() -> Session:
+# --- Database Dependency ---
+
+def get_db() -> Generator[Session, None, None]:
     """
-    Provides a SQLAlchemy database session.
-    Use as Depends(get_db) in routers.
+    Dependency to get a database session.
     """
-    db = get_db_session()
-    try:
-        yield db
-    finally:
-        db.close()
+    with get_db_session() as session:
+        yield session
 
+# --- Auth Dependency ---
 
-# --- CURRENT USER DEPENDENCY ---
+# This new scheme will look for an "Authorization: Bearer <token>" header
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
+
 def get_current_user(
-    vylarc_session: str | None = Cookie(default=None),
+    token: str = Depends(oauth2_scheme), 
     db: Session = Depends(get_db)
 ) -> models.User:
     """
-    Extracts current user from vylarc_session cookie (JWT).
-    Returns User model or raises 401 if not logged in.
+    Dependency to get the current authenticated user from a JWT Bearer token.
+    This will be used by our web chat plugin.
     """
-    if not vylarc_session:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not logged in",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
     
-    payload = security.decode_access_token(vylarc_session)
-    if not payload or "sub" not in payload:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid session",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    if token is None:
+        # This will be hit if the Authorization header is missing
+        raise credentials_exception
+        
+    payload = security.decode_access_token(token)
+    if payload is None:
+        raise credentials_exception
+        
+    user_id_str = payload.get("sub")
+    if user_id_str is None:
+        raise credentials_exception
+        
+    try:
+        user_id = uuid.UUID(user_id_str)
+    except ValueError:
+        raise credentials_exception
+
+    token_data = token_schema.TokenData(user_id=user_id)
     
-    user_id = payload["sub"]
-    user = db.query(models.User).filter(models.User.id == int(user_id)).first()
+    user = db.get(models.User, token_data.user_id)
     
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
-        )
-    
+    if user is None:
+        raise credentials_exception
+        
     return user
-
-
-# --- CURRENT ADMIN (OPTIONAL) ---
-def get_current_admin(
-    current_user: models.User = Depends(get_current_user)
-) -> models.User:
-    """
-    Checks if current user has admin rights.
-    Raises 403 if not.
-    """
-    if not getattr(current_user, "is_admin", False):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Insufficient permissions",
-        )
-    return current_user
-
-
-# --- OPTIONAL: CURRENT USER OR NONE ---
-def get_optional_user(
-    vylarc_session: str | None = Cookie(default=None),
-    db: Session = Depends(get_db)
-) -> models.User | None:
-    """
-    Returns user if logged in, otherwise None.
-    Useful for endpoints that allow both guests and users.
-    """
-    if not vylarc_session:
-        return None
-    payload = security.decode_access_token(vylarc_session)
-    if not payload or "sub" not in payload:
-        return None
-    user_id = payload["sub"]
-    return db.query(models.User).filter(models.User.id == int(user_id)).first()
