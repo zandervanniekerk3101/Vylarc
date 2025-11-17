@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     
     # --- THIS IS THE FIX ---
     # Admin Backdoor Email
-    ADMIN_EMAIL: str = "admin@example.com" # Default value if not set
+    ADMIN_EMAIL: str = "noreply@vylarc.com" # Default value if not set
     # --- END FIX ---
 
     # Google OAuth
