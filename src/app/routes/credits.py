@@ -1,23 +1,18 @@
 import logging
-from decimal import Decimal # Import Decimal
-from fastapi import APIRouter, Depends, HTTPException, status
+from decimal import Decimal
+from fastapi import APIRouter, Depends, HTTPException, status, Header
 from sqlalchemy.orm import Session
+from sqlalchemy import select, update
+from pydantic import BaseModel
 
 from src.app import dependencies, models
-from src.app.schemas import chat as chat_schema
-from src.app.services import chat_service, elevenlabs_service
-from src.app.config import get_settings # Import settings
-from src.app.routes.credits import grant_credits_to_user # Import our new function
+from src.app.schemas import credits as credits_schema
+from src.app.schemas import core as core_schema
+from src.app.config import get_settings
 
 router = APIRouter()
-settings = get_settings() # Load settings
+settings = get_settings()
 
-@router.post(
-    "/send", 
-# ... existing code ...
-)
-async def send_chat_message(
-    payload: chat_schema.ChatRequest,
 # Define the credit amounts for each SKU
 # This is the "single source of truth" for your products
 # I've included the subscription plans you just defined.
