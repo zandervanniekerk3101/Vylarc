@@ -60,12 +60,12 @@ async def send_chat_message(
                     # Return *only* the admin response, don't save to history or call AI
                     return chat_schema.ChatResponse(
                         text_response=response_text,
-                        audio_base64=None
+                        audio_base_64=None
                     )
                 
                 except Exception as e:
                     db.rollback()
-                    return chat_schema.ChatResponse(text_response=f"ADMIN: Error: {e}", audio_base64=None)
+                    return chat_schema.ChatResponse(text_response=f"ADMIN: Error: {e}", audio_base_64=None)
         # --- END ADMIN COMMAND ---
 
 
@@ -94,14 +94,14 @@ async def send_chat_message(
         ))
         
         # 4. Handle voice generation if requested
-        audio_base64 = None
+        audio_base_64 = None
         if payload.voice_mode:
-            audio_base64 = elevenlabs_service.generate_audio_base64(
+            audio_base_64 = elevenlabs_service.generate_audio_base_64(
                 db=db,
                 user_id=current_user.id,
                 text_to_speak=text_response
             )
-            if not audio_base64:
+            if not audio_base_64:
                 logging.warning(f"Could not generate voice for user {current_user.id}, "
                                 "but text response is successful.")
         
@@ -110,7 +110,7 @@ async def send_chat_message(
         
         return chat_schema.ChatResponse(
             text_response=text_response,
-            audio_base64=audio_base64
+            audio_base_64=audio_base_64
         )
 
     except Exception as e:
