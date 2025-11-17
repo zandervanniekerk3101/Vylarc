@@ -3,6 +3,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, status, Header
 from sqlalchemy.orm import Session
 from sqlalchemy import select, update
+from pydantic import BaseModel  # <-- THIS IS THE FIX
 
 from src.app import dependencies, models
 from src.app.schemas import credits as credits_schema
