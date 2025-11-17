@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str
     GOOGLE_MAPS_API_KEY: str
 
+# Secret for validating WooCommerce webhook
+    WORDPRESS_SECRET_KEY: str
+
     # Google OAuth
     GOOGLE_CLIENT_ID: str
     GOOGLE_CLIENT_SECRET: str
