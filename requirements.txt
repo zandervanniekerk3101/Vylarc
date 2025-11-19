@@ -1,6 +1,8 @@
 # Web Server
 fastapi
 uvicorn[standard]
+gunicorn
+python-multipart
 
 # Database & ORM
 sqlalchemy
@@ -9,10 +11,12 @@ alembic
 
 # Auth & Security
 passlib[bcrypt]
+bcrypt==4.0.1
 python-jose[cryptography]
 cryptography
+email-validator
 
-# Google APIs (Auth, Drive, Docs, Sheets, etc.)
+# Google APIs
 google-api-python-client
 google-auth-oauthlib
 google-auth-httplib2
@@ -20,15 +24,9 @@ google-auth-httplib2
 # AI Models
 openai
 google-generativeai
+elevenlabs
 
 # Utilities
 pydantic-settings
 python-dotenv
 requests
-
-# --- NEW FOR PHASE 2 ---
-elevenlabs
-
-gunicorn
-email-validator
-python-multipart
