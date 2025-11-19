@@ -16,6 +16,7 @@ from src.app.config import get_settings
 settings = get_settings()
 
 # --- PASSWORD HASHING ---
+# We explicitly handle the 72-byte limit of bcrypt here
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 BCRYPT_MAX_BYTES = 72
 
@@ -24,10 +25,15 @@ def _truncate_password(password: str) -> str:
     Safely truncate a password to bcrypt's 72-byte limit
     without breaking multi-byte characters.
     """
+    # Encode to bytes to check actual size
     b = password.encode("utf-8")
     if len(b) <= BCRYPT_MAX_BYTES:
         return password
+    
+    # If too long, truncate bytes
     truncated = b[:BCRYPT_MAX_BYTES]
+    
+    # Ensure we didn't cut a character in half
     while True:
         try:
             return truncated.decode("utf-8")
@@ -38,12 +44,23 @@ def get_password_hash(password: str) -> str:
     """
     Hash a password, safely truncating it to 72 bytes for bcrypt.
     """
+    if not password:
+        raise ValueError("Password cannot be empty")
+        
     safe_password = _truncate_password(password)
+    
+    # Only log if we actually had to truncate (for debugging)
     if safe_password != password:
-        logging.warning("Password truncated to 72 bytes for bcrypt compatibility.")
+        logging.warning("Password was automatically truncated to 72 bytes.")
+        
     return pwd_context.hash(safe_password)
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """
+    Verifies a password against a hash, handling truncation.
+    """
+    if not plain_password or not hashed_password:
+        return False
     return pwd_context.verify(_truncate_password(plain_password), hashed_password)
 
 # --- JWT ---
@@ -58,9 +75,12 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
     else:
         expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
+    
+    # Convert UUIDs to strings
     for key, value in to_encode.items():
         if isinstance(value, uuid.UUID):
             to_encode[key] = str(value)
+            
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
@@ -85,24 +105,26 @@ def set_auth_cookie(response: Response, token: str, max_age_minutes: int = 60*24
     )
 
 # --- AES ENCRYPTION FOR API KEYS ---
+cipher_suite = None
+
 try:
     key_material = bytes.fromhex(settings.ENCRYPTION_KEY)
+    # Ensure key is valid
     if len(key_material) < 32:
-        raise ValueError("ENCRYPTION_KEY must be at least 32 bytes (64 hex chars)")
-
-    salt = b'vylarc_static_salt'
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=salt,
-        iterations=100_000,
-    )
-    fernet_key = base64.urlsafe_b64encode(kdf.derive(key_material))
-    cipher_suite = Fernet(fernet_key)
-    logging.info("Security cipher suite initialized successfully.")
+        logging.warning("ENCRYPTION_KEY is too short (must be 64 hex chars). Encryption disabled.")
+    else:
+        salt = b'vylarc_static_salt'
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=100_000,
+        )
+        fernet_key = base64.urlsafe_b64encode(kdf.derive(key_material))
+        cipher_suite = Fernet(fernet_key)
+        logging.info("Security cipher suite initialized successfully.")
 except Exception as e:
     logging.critical(f"Failed to initialize encryption cipher: {e}")
-    cipher_suite = None
 
 def encrypt_data(data: str | None) -> str | None:
     if data is None or cipher_suite is None:
