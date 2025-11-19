@@ -1,35 +1,47 @@
 import uuid
 from sqlalchemy import (
-    Column, String, Integer, Text, DateTime, ForeignKey, Numeric, BigInteger,
-    func, Index, UniqueConstraint
+    Column, String, Integer, Text, DateTime, ForeignKey, Numeric, BigInteger, 
+    Boolean, Index, UniqueConstraint
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship, declarative_base
+from sqlalchemy.sql import func
 
 Base = declarative_base()
 
+# --- CORE IDENTITY ---
 class User(Base):
     __tablename__ = "users"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(String(320), unique=True, nullable=False, index=True)
-    password_hash = Column(Text, nullable=False)
+    password_hash = Column(Text, nullable=True) # Nullable if using Google Login only
     name = Column(String(255))
+    avatar_url = Column(String(1024))
+    is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    # Relationships
+    # --- Relationships ---
+    # 1:1 Relationships
     credits = relationship("UserCredits", uselist=False, back_populates="user", cascade="all, delete-orphan")
     api_keys = relationship("UserApiKeys", uselist=False, back_populates="user", cascade="all, delete-orphan")
+    google_creds = relationship("GoogleCredential", uselist=False, back_populates="user", cascade="all, delete-orphan")
+    
+    # 1:Many Relationships
     oauth_tokens = relationship("OAuthToken", back_populates="user", cascade="all, delete-orphan")
     chat_history = relationship("ChatHistory", back_populates="user", cascade="all, delete-orphan")
-    action_logs = relationship("ActionLog", back_populates="user") # SET NULL
+    action_logs = relationship("ActionLog", back_populates="user") 
     error_logs = relationship("ErrorLog", back_populates="user")
     file_uploads = relationship("FileUpload", back_populates="user", cascade="all, delete-orphan")
     call_logs = relationship("CallLog", back_populates="user", cascade="all, delete-orphan")
     billing_records = relationship("BillingRecord", back_populates="user", cascade="all, delete-orphan")
     documents_cache = relationship("DocumentsCache", back_populates="user", cascade="all, delete-orphan")
-    code_runs = relationship("CodeRun", back_populates="user") # SET NULL
+    code_runs = relationship("CodeRun", back_populates="user") 
     maps_queries = relationship("MapsQuery", back_populates="user", cascade="all, delete-orphan")
+    
+    # New Nexus Relationships
+    projects = relationship("Project", back_populates="user", cascade="all, delete-orphan")
+    map_pins = relationship("MapPin", back_populates="user", cascade="all, delete-orphan")
 
 class UserCredits(Base):
     __tablename__ = "user_credits"
@@ -37,7 +49,6 @@ class UserCredits(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
     balance = Column(Integer, nullable=False, default=0)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-
     user = relationship("User", back_populates="credits")
 
 class UserApiKeys(Base):
@@ -50,8 +61,60 @@ class UserApiKeys(Base):
     elevenlabs_voice_id = Column(String(255))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-
     user = relationship("User", back_populates="api_keys")
+
+# --- NEW: GOOGLE OFFLINE CREDENTIALS ---
+class GoogleCredential(Base):
+    __tablename__ = "google_credentials"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), unique=True)
+    access_token = Column(Text) # Encrypted
+    refresh_token = Column(Text) # Encrypted - CRITICAL for offline access
+    token_uri = Column(String(255), default="https://oauth2.googleapis.com/token")
+    client_id = Column(String(255))
+    client_secret = Column(String(255))
+    scopes = Column(JSONB) # List of granted scopes
+    expiry = Column(DateTime(timezone=True))
+    user = relationship("User", back_populates="google_creds")
+
+# --- NEW: CODING CANVAS PROJECTS ---
+class Project(Base):
+    __tablename__ = "projects"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
+    name = Column(String(255))
+    description = Column(Text)
+    status = Column(String(50), default="draft") # draft, building, completed
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    files = relationship("ProjectFile", back_populates="project", cascade="all, delete-orphan")
+    user = relationship("User", back_populates="projects")
+
+class ProjectFile(Base):
+    __tablename__ = "project_files"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"))
+    filename = Column(String(255)) # e.g., "src/main.py"
+    content = Column(Text)
+    language = Column(String(50))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    project = relationship("Project", back_populates="files")
+
+# --- NEW: SMART MAP PINS ---
+class MapPin(Base):
+    __tablename__ = "map_pins"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
+    google_place_id = Column(String(255))
+    name = Column(String(255))
+    lat = Column(Numeric(10, 7))
+    lng = Column(Numeric(10, 7))
+    notes = Column(Text)
+    tags = Column(JSONB) # ["client", "urgent"]
+    last_visited = Column(DateTime(timezone=True))
+    user = relationship("User", back_populates="map_pins")
+
+# --- EXISTING LOGGING & UTILITY TABLES ---
 
 class OAuthToken(Base):
     __tablename__ = "oauth_tokens"
@@ -63,7 +126,6 @@ class OAuthToken(Base):
     expires_at = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-
     user = relationship("User", back_populates="oauth_tokens")
 
 class ChatHistory(Base):
@@ -74,7 +136,6 @@ class ChatHistory(Base):
     message = Column(Text)
     voice_base64 = Column(Text)
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
-
     user = relationship("User", back_populates="chat_history")
     __table_args__ = (Index("idx_chat_history_user_time", "user_id", "timestamp"),)
 
@@ -88,7 +149,6 @@ class ActionLog(Base):
     response_payload = Column(JSONB)
     status_code = Column(Integer)
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
-
     user = relationship("User", back_populates="action_logs")
     __table_args__ = (Index("idx_action_logs_user_time", "user_id", "timestamp"),)
 
@@ -96,11 +156,10 @@ class ErrorLog(Base):
     __tablename__ = "error_logs"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     route = Column(String(255))
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True) # No cascade, keep error logs
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True) 
     error_message = Column(Text)
     stack_trace = Column(Text)
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
-
     user = relationship("User", back_populates="error_logs")
 
 class FileUpload(Base):
@@ -111,7 +170,6 @@ class FileUpload(Base):
     filesize = Column(BigInteger)
     drive_url = Column(Text)
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
-
     user = relationship("User", back_populates="file_uploads")
     __table_args__ = (Index("idx_file_uploads_user_time", "user_id", "timestamp"),)
 
@@ -128,7 +186,6 @@ class CallLog(Base):
     status = Column(String(64))
     twilio_sid = Column(String(255), index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-
     user = relationship("User", back_populates="call_logs")
 
 class BillingRecord(Base):
@@ -140,7 +197,6 @@ class BillingRecord(Base):
     payment_method = Column(String(64))
     transaction_id = Column(String(255), index=True)
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
-
     user = relationship("User", back_populates="billing_records")
 
 class DocumentsCache(Base):
@@ -150,7 +206,6 @@ class DocumentsCache(Base):
     file_hash = Column(String(128), nullable=False) # SHA256
     extracted_text = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-
     user = relationship("User", back_populates="documents_cache")
     __table_args__ = (UniqueConstraint("user_id", "file_hash", name="uq_user_file_hash"),)
 
@@ -165,7 +220,6 @@ class CodeRun(Base):
     duration_ms = Column(Integer)
     credits_charged = Column(Integer)
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
-
     user = relationship("User", back_populates="code_runs")
 
 class MapsQuery(Base):
@@ -176,5 +230,4 @@ class MapsQuery(Base):
     input = Column(JSONB)
     output = Column(JSONB)
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
-
     user = relationship("User", back_populates="maps_queries")
