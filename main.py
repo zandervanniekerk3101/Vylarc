@@ -1,9 +1,14 @@
 import logging
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+# We need Starlette's exception to catch default FastAPI errors
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
 from src.app.routes import auth, system, credits, chat
 from src.app.config import get_settings
+# Import your custom credit exception
+from src.app.services.credit_service import CreditException
 
 # --- LOGGING ---
 logging.basicConfig(level=logging.INFO)
@@ -19,19 +24,10 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# --- CORS / COOKIE SETTINGS ---
-origins = [
-    "https://vylarc.onrender.com",
-    "https://vylarc.com",
-    "https://platform.vylarc.com",
-    "https://developer.vylarc.com",
-    "http://localhost",
-    "http://localhost:8000",
-]
-
+# --- CORS ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"], 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -40,20 +36,27 @@ app.add_middleware(
 # --- GLOBAL EXCEPTION HANDLER ---
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
+    # 1. Allow standard HTTP Exceptions (404, 409, 422, etc.) to pass through
+    # This fixes the issue where "Email already exists" becomes "Internal Server Error"
+    if isinstance(exc, (HTTPException, StarletteHTTPException)):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+        )
+        
+    # 2. Handle Vylarc Credit Exceptions (Payment Required)
+    if isinstance(exc, CreditException):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+        )
+
+    # 3. Log and mask ACTUAL Server Crashes
+    # If we get here, it's a real crash (code bug).
     logger.error(f"Unhandled exception for {request.url}: {exc}", exc_info=True)
-    try:
-        from src.app.services.credit_service import CreditException
-        if isinstance(exc, CreditException):
-            return JSONResponse(
-                status_code=exc.status_code,
-                content={"detail": exc.detail},
-            )
-    except ImportError:
-        pass
-    
     return JSONResponse(
         status_code=500,
-        content={"detail": "An internal server error occurred."},
+        content={"detail": f"Internal Server Error: {str(exc)}"}, # Temporary: show the error to help you debug
     )
 
 # --- ROUTERS ---
