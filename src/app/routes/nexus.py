@@ -20,6 +20,13 @@ class ProjectCreate(BaseModel):
     description: str
     files: List[FileItem] = []
 
+class MapPinCreate(BaseModel):
+    name: str
+    lat: float
+    lng: float
+    google_place_id: Optional[str] = None
+    notes: Optional[str] = None
+
 # --- CODING CANVAS ROUTES ---
 
 @router.post("/projects", summary="Create a new Coding Workspace")
@@ -28,12 +35,10 @@ async def create_project(
     user: models.User = Depends(dependencies.get_current_user),
     db: Session = Depends(dependencies.get_db)
 ):
-    # Create Project
     project = models.Project(name=payload.name, description=payload.description, user_id=user.id)
     db.add(project)
     db.flush() # Generate ID
 
-    # Add Files
     for f in payload.files:
         db.add(models.ProjectFile(
             project_id=project.id, 
@@ -52,7 +57,6 @@ async def execute_build(
     user: models.User = Depends(dependencies.get_current_user),
     db: Session = Depends(dependencies.get_db)
 ):
-    # Validate UUID
     try:
         p_uuid = uuid.UUID(project_id)
     except ValueError:
@@ -62,21 +66,19 @@ async def execute_build(
     if not project or project.user_id != user.id:
         raise HTTPException(404, "Project not found")
 
-    # MOCK BUILD SIMULATION (For Render Free Tier)
+    # MOCK BUILD LOGS (Simulating Docker Container Output)
     logs = [
         "Initializing Vylarc Core Build Environment...",
         "Allocating Sandbox (2 CPU, 1GB RAM)...",
         "Mounting File System...",
     ]
-    
-    # Simulate processing files
     for file in project.files:
         logs.append(f"> Compiling {file.filename}...")
+        # In a real app, we would actually run code here via subprocess or Docker
     
     logs.append("Running Tests... [PASS]")
     logs.append("Build Successful. Artifact generated.")
     
-    # Update Status
     project.status = "completed"
     db.commit()
 
@@ -87,12 +89,17 @@ async def execute_build(
     }
 
 # --- SMART MAPPING ROUTES ---
-class MapPinCreate(BaseModel):
-    name: str
-    lat: float
-    lng: float
-    google_place_id: Optional[str] = None
-    notes: Optional[str] = None
+
+@router.get("/map/pins", summary="Get Saved Pins")
+async def get_map_pins(
+    user: models.User = Depends(dependencies.get_current_user),
+    db: Session = Depends(dependencies.get_db)
+):
+    """
+    Returns all map pins saved by the user.
+    """
+    pins = db.query(models.MapPin).filter(models.MapPin.user_id == user.id).all()
+    return {"pins": pins}
 
 @router.post("/map/pin", summary="Save a Location Pin")
 async def save_map_pin(
@@ -110,4 +117,36 @@ async def save_map_pin(
     )
     db.add(new_pin)
     db.commit()
-    return {"message": "Location pinned to Cyber Grid."}
+    return {"message": "Location pinned to Cyber Grid.", "id": str(new_pin.id)}
+
+# --- DRIVE / FILES ROUTES ---
+
+@router.get("/files", summary="List Uploaded Files")
+async def list_files(
+    user: models.User = Depends(dependencies.get_current_user),
+    db: Session = Depends(dependencies.get_db)
+):
+    """
+    Lists files for the Drive module.
+    """
+    files = db.query(models.FileUpload).filter(models.FileUpload.user_id == user.id).order_by(models.FileUpload.timestamp.desc()).all()
+    
+    # Format for frontend
+    file_list = []
+    for f in files:
+        # Determine simple type for UI icon
+        ftype = "doc"
+        if f.filename.endswith(('.png', '.jpg', '.jpeg')): ftype = "image"
+        elif f.filename.endswith(('.xls', '.xlsx', '.csv')): ftype = "sheet"
+        elif f.filename.endswith('.zip'): ftype = "zip"
+        
+        file_list.append({
+            "id": str(f.id),
+            "name": f.filename,
+            "type": ftype,
+            "size": f"{f.filesize / 1024:.1f} KB" if f.filesize else "Unknown",
+            "date": f.timestamp.strftime("%Y-%m-%d"),
+            "url": f.drive_url or "#"
+        })
+        
+    return {"files": file_list}

@@ -20,7 +20,7 @@ from src.app.utils import security
 router = APIRouter()
 settings = get_settings()
 
-# --- Google OAuth2 Flow ---
+# --- Google OAuth2 Flow Setup ---
 GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/userinfo.profile",
     "https://www.googleapis.com/auth/userinfo.email",

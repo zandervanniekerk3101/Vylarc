@@ -5,9 +5,10 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from contextlib import asynccontextmanager
 
-# --- DATABASE & MODELS ---
+# --- IMPORTS FOR DB AUTO-INIT ---
 from src.app.database import engine
 from src.app.models import models
+# --------------------------------
 
 # --- ROUTES ---
 from src.app.routes import auth, system, credits, chat, nexus
