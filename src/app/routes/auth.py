@@ -49,27 +49,13 @@ def get_google_flow() -> Flow:
         redirect_uri=settings.FULL_GOOGLE_REDIRECT_URI,
     )
 
-# --- Helper: Truncate password safely to 72 bytes ---
-def safe_truncate_password(password: str) -> str:
-    b = password.encode("utf-8")
-    if len(b) > 72:
-        # Truncate to 72 bytes without breaking multi-byte characters
-        truncated = b[:72]
-        while True:
-            try:
-                return truncated.decode("utf-8")
-            except UnicodeDecodeError:
-                truncated = truncated[:-1]
-    return password
-
 # --- Standard Auth Routes ---
 @router.post("/register", response_model=user_schema.UserPublic, status_code=status.HTTP_201_CREATED)
 async def register_user(user_in: user_schema.UserCreate, db: Session = Depends(dependencies.get_db)):
     if not user_in.password or len(user_in.password) < 6:
         raise HTTPException(status_code=422, detail="Password must be at least 6 characters long.")
     
-    password_safe = safe_truncate_password(user_in.password)
-    hashed_password = security.get_password_hash(password_safe)
+    hashed_password = security.get_password_hash(user_in.password)
 
     new_user = models.User(
         email=user_in.email.lower(),
@@ -94,13 +80,9 @@ async def register_user(user_in: user_schema.UserCreate, db: Session = Depends(d
 @router.post("/login", response_model=token_schema.Token)
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(dependencies.get_db)):
     user = db.query(models.User).filter(models.User.email == form_data.username.lower()).first()
-    if not user:
+    if not user or not security.verify_password(form_data.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Incorrect email or password")
     
-    password_safe = safe_truncate_password(form_data.password)
-    if not security.verify_password(password_safe, user.password_hash):
-        raise HTTPException(status_code=401, detail="Incorrect email or password")
-
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = security.create_access_token(data={"sub": str(user.id)}, expires_delta=access_token_expires)
     return {"access_token": access_token, "token_type": "bearer"}
@@ -188,7 +170,7 @@ async def wordpress_sso_login(payload: WpLoginPayload, x_wordpress_secret: str =
 
     if not user:
         logging.info(f"Auto-provisioning new Vylarc user from WP: {payload.email}")
-        hashed_password = security.get_password_hash(safe_truncate_password(f"wp-sso-{uuid.uuid4()}"))
+        hashed_password = security.get_password_hash(f"wp-sso-{uuid.uuid4()}")
         user = models.User(
             email=payload.email.lower(),
             name=payload.name,

@@ -17,12 +17,34 @@ settings = get_settings()
 
 # --- PASSWORD HASHING ---
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+BCRYPT_MAX_BYTES = 72
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+def _truncate_password(password: str) -> str:
+    """
+    Safely truncate a password to bcrypt's 72-byte limit
+    without breaking multi-byte characters.
+    """
+    b = password.encode("utf-8")
+    if len(b) <= BCRYPT_MAX_BYTES:
+        return password
+    truncated = b[:BCRYPT_MAX_BYTES]
+    while True:
+        try:
+            return truncated.decode("utf-8")
+        except UnicodeDecodeError:
+            truncated = truncated[:-1]
 
 def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
+    """
+    Hash a password, safely truncating it to 72 bytes for bcrypt.
+    """
+    safe_password = _truncate_password(password)
+    if safe_password != password:
+        logging.warning("Password truncated to 72 bytes for bcrypt compatibility.")
+    return pwd_context.hash(safe_password)
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(_truncate_password(plain_password), hashed_password)
 
 # --- JWT ---
 SECRET_KEY = settings.FLASK_SECRET_KEY
@@ -67,7 +89,7 @@ try:
     key_material = bytes.fromhex(settings.ENCRYPTION_KEY)
     if len(key_material) < 32:
         raise ValueError("ENCRYPTION_KEY must be at least 32 bytes (64 hex chars)")
-    
+
     salt = b'vylarc_static_salt'
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
