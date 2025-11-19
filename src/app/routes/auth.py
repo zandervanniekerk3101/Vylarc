@@ -60,10 +60,12 @@ async def register_user(user_in: user_schema.UserCreate, db: Session = Depends(d
     new_user = models.User(
         email=user_in.email.lower(),
         name=user_in.name,
-        password_hash=hashed_password,
-        credits=models.UserCredits(balance=0),
-        api_keys=models.UserApiKeys()
+        password_hash=hashed_password
     )
+    # Create Relations
+    new_user.credits = models.UserCredits(balance=0)
+    new_user.api_keys = models.UserApiKeys()
+
     try:
         db.add(new_user)
         db.commit()
@@ -86,6 +88,58 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = security.create_access_token(data={"sub": str(user.id)}, expires_delta=access_token_expires)
     return {"access_token": access_token, "token_type": "bearer"}
+
+# --- User Info ---
+@router.get("/me", response_model=user_schema.UserProfile)
+async def read_users_me(current_user: models.User = Depends(dependencies.get_current_user)):
+    return {"user": current_user, "credits": current_user.credits}
+
+# --- API KEYS CONFIGURATION (Fixes Settings Module) ---
+@router.post("/update-external-keys", response_model=user_schema.ApiKeysPublic)
+async def update_external_keys(
+    keys_in: user_schema.ApiKeysUpdate,
+    current_user: models.User = Depends(dependencies.get_current_user),
+    db: Session = Depends(dependencies.get_db)
+):
+    """
+    Updates encrypted keys.
+    Handles mapping 'twilio_auth_token' (Schema) -> 'twilio_auth' (DB).
+    """
+    api_keys = db.query(models.UserApiKeys).filter(models.UserApiKeys.user_id == current_user.id).first()
+    
+    if not api_keys:
+        # Auto-create if missing
+        api_keys = models.UserApiKeys(user_id=current_user.id)
+        db.add(api_keys)
+        
+    # Encrypt and Map fields
+    if keys_in.twilio_sid:
+        api_keys.twilio_sid = security.encrypt_data(keys_in.twilio_sid)
+        
+    if keys_in.twilio_auth_token:
+        # CRITICAL FIX: Map schema field 'twilio_auth_token' to DB field 'twilio_auth'
+        api_keys.twilio_auth = security.encrypt_data(keys_in.twilio_auth_token)
+        
+    if keys_in.elevenlabs_key:
+        api_keys.elevenlabs_key = security.encrypt_data(keys_in.elevenlabs_key)
+        
+    if keys_in.elevenlabs_voice_id:
+        api_keys.elevenlabs_voice_id = keys_in.elevenlabs_voice_id
+        
+    try:
+        db.commit()
+        db.refresh(api_keys)
+    except Exception as e:
+        db.rollback()
+        logging.error(f"Key update error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save keys.")
+    
+    return {
+        "has_twilio": api_keys.twilio_sid is not None,
+        "has_elevenlabs": api_keys.elevenlabs_key is not None,
+        "elevenlabs_voice_id": api_keys.elevenlabs_voice_id,
+        "updated_at": api_keys.updated_at
+    }
 
 # --- Google OAuth Routes ---
 @router.get("/google/login")
@@ -115,28 +169,37 @@ async def google_callback(request: Request, code: str, db: Session = Depends(dep
     if not email:
         raise HTTPException(status_code=400, detail="Email not returned from Google.")
 
+    # Find or Create User
     user = db.query(models.User).filter(models.User.email == email.lower()).first()
     if not user:
         user = models.User(
             email=email.lower(),
             name=name,
-            password_hash=f"google-oauth-{uuid.uuid4()}",
-            credits=models.UserCredits(balance=0),
-            api_keys=models.UserApiKeys()
+            password_hash=f"google-oauth-{uuid.uuid4()}"
         )
+        user.credits = models.UserCredits(balance=0)
+        user.api_keys = models.UserApiKeys()
         db.add(user)
 
+    # Store OAuth Tokens (Encrypted)
     encrypted_access = security.encrypt_data(credentials.token)
     encrypted_refresh = security.encrypt_data(credentials.refresh_token)
     expires_at = getattr(credentials, "expiry", None)
 
+    # Upsert OAuthToken Record
     db_token = db.query(models.OAuthToken).filter(models.OAuthToken.user_id == user.id, models.OAuthToken.provider == "google").first()
     if db_token:
         db_token.access_token = encrypted_access
         db_token.refresh_token = encrypted_refresh
         db_token.expires_at = expires_at
     else:
-        db_token = models.OAuthToken(user_id=user.id, provider="google", access_token=encrypted_access, refresh_token=encrypted_refresh, expires_at=expires_at)
+        db_token = models.OAuthToken(
+            user_id=user.id, 
+            provider="google", 
+            access_token=encrypted_access, 
+            refresh_token=encrypted_refresh, 
+            expires_at=expires_at
+        )
         db.add(db_token)
 
     try:
@@ -147,13 +210,18 @@ async def google_callback(request: Request, code: str, db: Session = Depends(dep
         logging.error(f"Google login commit error: {e}")
         raise HTTPException(status_code=500, detail="Could not process Google login.")
 
+    # Generate Vylarc JWT
     vylarc_jwt = security.create_access_token(data={"sub": str(user.id)}, expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
-    return {"access_token": vylarc_jwt, "token_type": "bearer"}
-
-# --- User Info ---
-@router.get("/me", response_model=user_schema.UserProfile)
-async def read_users_me(current_user: models.User = Depends(dependencies.get_current_user)):
-    return {"user": current_user, "credits": current_user.credits}
+    
+    # REDIRECT BACK TO VYLARC SITE WITH TOKEN
+    # The frontend will parse ?vylarc_token=... from the URL
+    redirect_url = f"{settings.PUBLIC_BASE_URL.replace('api.', '')}?vylarc_token={vylarc_jwt}"
+    
+    # Fallback if settings URL is localhost
+    if "localhost" in settings.PUBLIC_BASE_URL:
+        redirect_url = f"http://localhost:3000?vylarc_token={vylarc_jwt}"
+        
+    return Response(status_code=307, headers={"Location": redirect_url})
 
 # --- WordPress Bridge ---
 class WpLoginPayload(BaseModel):
@@ -174,10 +242,11 @@ async def wordpress_sso_login(payload: WpLoginPayload, x_wordpress_secret: str =
         user = models.User(
             email=payload.email.lower(),
             name=payload.name,
-            password_hash=hashed_password,
-            credits=models.UserCredits(balance=0),
-            api_keys=models.UserApiKeys()
+            password_hash=hashed_password
         )
+        user.credits = models.UserCredits(balance=0)
+        user.api_keys = models.UserApiKeys()
+        
         try:
             db.add(user)
             db.commit()
