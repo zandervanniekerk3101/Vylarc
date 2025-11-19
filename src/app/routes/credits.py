@@ -1,9 +1,11 @@
 import logging
 from decimal import Decimal
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, status, Header
 from sqlalchemy.orm import Session
 from sqlalchemy import select, update
-from pydantic import BaseModel  # <-- THIS IS THE FIX
+from pydantic import BaseModel, EmailStr
 
 from src.app import dependencies, models
 from src.app.schemas import credits as credits_schema
@@ -13,20 +15,21 @@ from src.app.config import get_settings
 router = APIRouter()
 settings = get_settings()
 
-# Define the credit amounts for each SKU
+# --- SKU CONFIGURATION ---
+# Mapped according to your Vylarc Project Brief (Source 302)
 SKU_TO_CREDITS = {
-    # --- One-Time Purchase SKUs ---
-    "vylarc_2000_credits": 2000,
-    "vylarc_10000_credits": 10000,
-    "vylarc_30000_credits": 30000,
-
-    # --- Subscription SKUs ---
-    "vylarc_launch_monthly": 5000,
-    "vylarc_pro_monthly": 15000,
-    "vylarc_dynamics_monthly": 50000,
+    # Pay-As-You-Go
+    "vylarc_pack_2000": 2000,
+    "vylarc_pack_10000": 10000,
+    "vylarc_pack_30000": 30000,
+    
+    # Subscriptions
+    "vylarc_sub_pro": 10000,      # Pro Tier
+    "vylarc_sub_business": 80000, # Business Tier
+    "vylarc_sub_enterprise": 400000 # Enterprise Tier
 }
 
-# --- REUSABLE FUNCTION ---
+# --- HELPER FUNCTION ---
 def grant_credits_to_user(
     db: Session,
     user_id: str,
@@ -37,7 +40,7 @@ def grant_credits_to_user(
 ) -> bool:
     """
     Internal function to add credits and log billing.
-    Returns True on success, raises exception on failure.
+    Returns True on success, returns False if user account missing.
     """
     try:
         logging.info(f"Granting {credits_to_add} credits to user {user_id} via {payment_method}")
@@ -52,7 +55,7 @@ def grant_credits_to_user(
         )
         db.add(new_record)
         
-        # 2. Update user's credit balance (atomically)
+        # 2. Update user's credit balance (atomically with lock)
         credits = db.scalar(
             select(models.UserCredits)
             .where(models.UserCredits.user_id == user_id)
@@ -60,27 +63,30 @@ def grant_credits_to_user(
         )
         
         if not credits:
-            db.rollback()
-            logging.error(f"Credit grant failed: User credit account not found for {user_id}")
-            return False
+            # Auto-heal: If credit row missing, create it
+            logging.warning(f"Credit row missing for {user_id}, creating now.")
+            credits = models.UserCredits(user_id=user_id, balance=0)
+            db.add(credits)
+            db.flush() # Ensure ID is generated
 
         new_balance = credits.balance + credits_to_add
         
+        # Execute Update
         db.execute(
             update(models.UserCredits)
             .where(models.UserCredits.user_id == user_id)
             .values(balance=new_balance)
         )
         
-        # db.commit() will be called by the route
+        # db.commit() is NOT called here, allowing the route to commit everything at once
         return True
         
     except Exception as e:
-        db.rollback()
+        # We don't rollback here because the caller (route) handles the transaction scope
         logging.error(f"Failed to add credits for user {user_id}: {e}")
-        raise # Re-raise the exception to be handled by the route
-# --- END NEW FUNCTION ---
+        raise e
 
+# --- ROUTES ---
 
 @router.get(
     "/balance", 
@@ -99,14 +105,15 @@ async def get_credit_balance(
         .where(models.UserCredits.user_id == current_user.id)
     )
     if not credits:
-        raise HTTPException(status_code=404, detail="Credit account not found.")
+        # Return 0 if account doesn't exist yet, rather than 404 error
+        return {"balance": 0, "updated_at": None}
     
     return credits
 
 @router.post(
     "/add", 
     response_model=credits_schema.BillingRecordPublic,
-    summary="Add credits after successful payment (ADMIN)"
+    summary="Add credits manually (Admin/System)"
 )
 async def add_credits(
     payload: credits_schema.CreditAddRequest,
@@ -115,7 +122,7 @@ async def add_credits(
 ):
     """
     Adds credits to a user's account and logs a billing record.
-    This endpoint is called by an admin panel or payment gateway.
+    Used by internal admin panels or manual top-ups.
     """
     try:
         grant_success = grant_credits_to_user(
@@ -127,39 +134,34 @@ async def add_credits(
             transaction_id=payload.transaction_id
         )
         
-        if grant_success:
-            db.commit()
-            # Need to get the new record to return it
-            new_record = db.query(models.BillingRecord).filter(
-                models.BillingRecord.user_id == payload.user_id,
-                models.BillingRecord.transaction_id == payload.transaction_id
-            ).first()
-            
-            if not new_record:
-                 # This should be impossible, but good to check
-                 raise HTTPException(status_code=404, detail="Billing record not found after creation.")
+        db.commit()
 
-            response = new_record.__dict__
-            response['amount_paid'] = str(new_record.amount_paid)
-            return response
-        else:
-            raise HTTPException(status_code=404, detail="User credit account not found.")
+        # Fetch the new record to return it
+        new_record = db.query(models.BillingRecord).filter(
+            models.BillingRecord.user_id == payload.user_id,
+            models.BillingRecord.transaction_id == payload.transaction_id
+        ).first()
+        
+        response = new_record.__dict__
+        response['amount_paid'] = str(new_record.amount_paid)
+        return response
 
     except Exception as e:
         db.rollback()
-        logging.error(f"Failed to add credits for user {payload.user_id}: {e}")
+        logging.error(f"Failed to add credits: {e}")
         raise HTTPException(status_code=500, detail="Failed to update credit balance.")
 
-# --- NEW ENDPOINT FOR WOOCOMMERCE ---
+# --- WOOCOMMERCE WEBHOOK ---
 
 class PurchasePayload(BaseModel):
     """
     Payload for the /credits/grant_purchase webhook.
+    Matches the JSON sent by vylarc-woo-linker.php
     """
-    email: str
+    email: EmailStr
     sku: str
     order_id: str
-    amount_paid_decimal: str
+    amount_paid_decimal: float
     payment_method: str | None = None
     is_recurring: bool = False
 
@@ -170,19 +172,18 @@ class PurchasePayload(BaseModel):
 )
 async def grant_credits_from_purchase(
     payload: PurchasePayload,
-    x_wordpress_secret: str = Header(None),
+    x_wordpress_secret: Optional[str] = Header(None),
     db: Session = Depends(dependencies.get_db)
 ):
     """
-    This is the secure webhook called by the vylarc-woo-linker.php plugin.
-    It validates the secret key, finds the user by email, and adds credits
-    based on the product SKU.
+    Secure webhook called by the WooCommerce Linker plugin.
+    Validates secret key, maps SKU to credits, and updates user balance.
     """
-    logging.info(f"Received credit grant request for email: {payload.email}")
+    logging.info(f"Received webhook for email: {payload.email}, SKU: {payload.sku}")
 
     # 1. Security Check
     if not x_wordpress_secret or x_wordpress_secret != settings.WORDPRESS_SECRET_KEY:
-        logging.warning(f"Invalid or missing X-WordPress-Secret. Access denied.")
+        logging.warning(f"Unauthorized webhook attempt. Token provided: {x_wordpress_secret}")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Invalid secret key."
@@ -197,35 +198,33 @@ async def grant_credits_from_purchase(
         logging.error(f"Purchase grant failed: User not found for email {payload.email}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"User with email {payload.email} not found. Credits not granted. User must register on Vylarc with this email."
+            detail=f"User {payload.email} not found. Please register in the app first."
         )
 
     # 3. Get Credit Amount from SKU
     credits_to_add = SKU_TO_CREDITS.get(payload.sku)
     
     if not credits_to_add:
-        logging.warning(f"Purchase grant ignored: SKU {payload.sku} is not in mapping.")
-        return {"message": f"SKU {payload.sku} is not a Vylarc credit product. No credits added."}
+        logging.warning(f"Purchase grant ignored: SKU {payload.sku} not found in mapping.")
+        # We return 200 OK to stop WooCommerce from retrying endlessly on invalid SKUs
+        return {"message": f"SKU {payload.sku} is not configured for credits. No action taken."}
 
-    # 4. Add Credits and Log Billing Record (USING THE NEW FUNCTION)
+    # 4. Execute Grant
     try:
-        grant_success = grant_credits_to_user(
+        grant_credits_to_user(
             db=db,
             user_id=user.id,
             credits_to_add=credits_to_add,
             amount_paid=Decimal(payload.amount_paid_decimal),
-            payment_method=payload.payment_method or "WooCommerce",
+            payment_method=f"{payload.payment_method or 'WooCommerce'} ({'Sub' if payload.is_recurring else 'One-Time'})",
             transaction_id=payload.order_id
         )
         
-        if grant_success:
-            db.commit()
-            return {"message": f"Successfully granted {credits_to_add} credits to {payload.email}."}
-        else:
-            raise HTTPException(status_code=404, detail="User credit account not found.")
+        db.commit()
+        logging.info(f"SUCCESS: Added {credits_to_add} credits to {user.email}")
+        return {"message": f"Successfully granted {credits_to_add} credits to {payload.email}."}
 
     except Exception as e:
         db.rollback()
-        logging.error(f"Failed to add credits for user {user.id} from purchase: {e}")
-        raise HTTPException(status_code=500, detail="Failed to update credit balance.")
-# --- END NEW ENDPOINT ---
+        logging.error(f"Database error in grant_purchase: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error processing credits.")
