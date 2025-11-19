@@ -1,5 +1,6 @@
 import base64
 import logging
+import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Any
 import uuid
@@ -15,53 +16,35 @@ from src.app.config import get_settings
 
 settings = get_settings()
 
-# --- PASSWORD HASHING ---
-# We explicitly handle the 72-byte limit of bcrypt here
+# --- PASSWORD HASHING (Double-Hash Strategy) ---
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-BCRYPT_MAX_BYTES = 72
-
-def _truncate_password(password: str) -> str:
-    """
-    Safely truncate a password to bcrypt's 72-byte limit
-    without breaking multi-byte characters.
-    """
-    # Encode to bytes to check actual size
-    b = password.encode("utf-8")
-    if len(b) <= BCRYPT_MAX_BYTES:
-        return password
-    
-    # If too long, truncate bytes
-    truncated = b[:BCRYPT_MAX_BYTES]
-    
-    # Ensure we didn't cut a character in half
-    while True:
-        try:
-            return truncated.decode("utf-8")
-        except UnicodeDecodeError:
-            truncated = truncated[:-1]
 
 def get_password_hash(password: str) -> str:
     """
-    Hash a password, safely truncating it to 72 bytes for bcrypt.
+    Hashes a password securely.
+    1. Hashes input with SHA-256 (turns any length into 64 chars).
+    2. Hashes the result with Bcrypt (safe from 72-byte limit).
     """
     if not password:
         raise ValueError("Password cannot be empty")
-        
-    safe_password = _truncate_password(password)
     
-    # Only log if we actually had to truncate (for debugging)
-    if safe_password != password:
-        logging.warning("Password was automatically truncated to 72 bytes.")
-        
-    return pwd_context.hash(safe_password)
+    # Step 1: SHA-256 Pre-hash (Guarantees 64 bytes)
+    pre_hash = hashlib.sha256(password.encode('utf-8')).hexdigest()
+    
+    # Step 2: Bcrypt Hash
+    return pwd_context.hash(pre_hash)
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """
-    Verifies a password against a hash, handling truncation.
+    Verifies a password using the same double-hash strategy.
     """
     if not plain_password or not hashed_password:
         return False
-    return pwd_context.verify(_truncate_password(plain_password), hashed_password)
+        
+    # Must pre-hash the input to match the stored hash logic
+    pre_hash = hashlib.sha256(plain_password.encode('utf-8')).hexdigest()
+    
+    return pwd_context.verify(pre_hash, hashed_password)
 
 # --- JWT ---
 SECRET_KEY = settings.FLASK_SECRET_KEY
@@ -76,7 +59,6 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
         expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     
-    # Convert UUIDs to strings
     for key, value in to_encode.items():
         if isinstance(value, uuid.UUID):
             to_encode[key] = str(value)
@@ -109,9 +91,8 @@ cipher_suite = None
 
 try:
     key_material = bytes.fromhex(settings.ENCRYPTION_KEY)
-    # Ensure key is valid
     if len(key_material) < 32:
-        logging.warning("ENCRYPTION_KEY is too short (must be 64 hex chars). Encryption disabled.")
+        logging.warning("ENCRYPTION_KEY is too short. Encryption disabled.")
     else:
         salt = b'vylarc_static_salt'
         kdf = PBKDF2HMAC(
