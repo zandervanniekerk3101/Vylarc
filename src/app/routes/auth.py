@@ -9,7 +9,7 @@ from google.auth.transport import requests as google_requests
 from google_auth_oauthlib.flow import Flow
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from pydantic import BaseModel, EmailStr # Added for new endpoint
+from pydantic import BaseModel, EmailStr, constr
 
 from src.app import models, dependencies
 from src.app.config import get_settings
@@ -19,6 +19,8 @@ from src.app.utils import security
 
 router = APIRouter()
 settings = get_settings()
+
+MAX_BCRYPT_PASSWORD_BYTES = 72  # bcrypt limit
 
 # --- Google OAuth2 Flow ---
 GOOGLE_SCOPES = [
@@ -49,21 +51,28 @@ def get_google_flow() -> Flow:
         redirect_uri=settings.FULL_GOOGLE_REDIRECT_URI,
     )
 
-# --- Standard Auth Routes (for Android / 3rd Party) ---
+# --- Pydantic Model Override for Safe Registration ---
+class SafeUserCreate(user_schema.UserCreate):
+    password: constr(min_length=8, max_length=MAX_BCRYPT_PASSWORD_BYTES)
+
+# --- Standard Auth Routes ---
 @router.post("/register", response_model=user_schema.UserPublic, status_code=status.HTTP_201_CREATED)
-async def register_user(user_in: user_schema.UserCreate, db: Session = Depends(dependencies.get_db)):
-    hashed_password = security.get_password_hash(user_in.password)
-    new_user = models.User(
-        email=user_in.email.lower(),
-        name=user_in.name,
-        password_hash=hashed_password,
-        credits=models.UserCredits(balance=0),
-        api_keys=models.UserApiKeys()
-    )
+async def register_user(user_in: SafeUserCreate, db: Session = Depends(dependencies.get_db)):
     try:
+        # truncate to max bcrypt length as a safety
+        safe_password = user_in.password[:MAX_BCRYPT_PASSWORD_BYTES]
+        hashed_password = security.get_password_hash(safe_password)
+        new_user = models.User(
+            email=user_in.email.lower(),
+            name=user_in.name,
+            password_hash=hashed_password,
+            credits=models.UserCredits(balance=0),
+            api_keys=models.UserApiKeys()
+        )
         db.add(new_user)
         db.commit()
         db.refresh(new_user)
+        return new_user
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail="Email already registered.")
@@ -71,19 +80,23 @@ async def register_user(user_in: user_schema.UserCreate, db: Session = Depends(d
         db.rollback()
         logging.error(f"Registration error: {e}")
         raise HTTPException(status_code=500, detail="Could not register user.")
-    return new_user
 
 @router.post("/login", response_model=token_schema.Token)
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(dependencies.get_db)):
     user = db.query(models.User).filter(models.User.email == form_data.username.lower()).first()
-    if not user or not security.verify_password(form_data.password, user.password_hash):
+    if not user:
+        raise HTTPException(status_code=401, detail="Incorrect email or password")
+    
+    # truncate incoming password to 72 bytes before verifying
+    safe_password = form_data.password[:MAX_BCRYPT_PASSWORD_BYTES]
+    if not security.verify_password(safe_password, user.password_hash):
         raise HTTPException(status_code=401, detail="Incorrect email or password")
     
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = security.create_access_token(data={"sub": str(user.id)}, expires_delta=access_token_expires)
     return {"access_token": access_token, "token_type": "bearer"}
 
-# --- Google OAuth Routes (for Android / 3rd Party) ---
+# --- Google OAuth Routes ---
 @router.get("/google/login")
 async def google_login(request: Request):
     flow = get_google_flow()
@@ -91,7 +104,6 @@ async def google_login(request: Request):
     return Response(status_code=307, headers={"Location": auth_url})
 
 @router.get("/google/callback")
-# ... (rest of google_callback function remains unchanged) ...
 async def google_callback(request: Request, code: str, db: Session = Depends(dependencies.get_db)):
     flow = get_google_flow()
     try:
@@ -114,7 +126,13 @@ async def google_callback(request: Request, code: str, db: Session = Depends(dep
     
     user = db.query(models.User).filter(models.User.email == email.lower()).first()
     if not user:
-        user = models.User(email=email.lower(), name=name, password_hash=f"google-oauth-{uuid.uuid4()}", credits=models.UserCredits(balance=0), api_keys=models.UserApiKeys())
+        user = models.User(
+            email=email.lower(),
+            name=name,
+            password_hash=security.get_password_hash(f"google-oauth-{uuid.uuid4()}")[:MAX_BCRYPT_PASSWORD_BYTES],
+            credits=models.UserCredits(balance=0),
+            api_keys=models.UserApiKeys()
+        )
         db.add(user)
     
     # Store tokens
@@ -139,18 +157,14 @@ async def google_callback(request: Request, code: str, db: Session = Depends(dep
         raise HTTPException(status_code=500, detail="Could not process Google login.")
     
     vylarc_jwt = security.create_access_token(data={"sub": str(user.id)}, expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
-    # This just returns the token, the client is responsible for storage
     return {"access_token": vylarc_jwt, "token_type": "bearer"}
 
 # --- User Info ---
 @router.get("/me", response_model=user_schema.UserProfile)
 async def read_users_me(current_user: models.User = Depends(dependencies.get_current_user)):
-    # This now uses the new get_current_user (Bearer token)
     return {"user": current_user, "credits": current_user.credits}
 
-
-# --- NEW WORDPRESS BRIDGE ENDPOINT ---
-
+# --- WordPress Bridge ---
 class WpLoginPayload(BaseModel):
     email: EmailStr
     name: str | None = None
@@ -161,38 +175,26 @@ async def wordpress_sso_login(
     x_wordpress_secret: str = Header(None),
     db: Session = Depends(dependencies.get_db)
 ):
-    """
-    Secure endpoint for WordPress to get a Vylarc JWT for a user.
-    This will find or create the user in the Vylarc DB.
-    """
-    # 1. Security Check
     if not x_wordpress_secret or x_wordpress_secret != settings.WORDPRESS_SECRET_KEY:
-        logging.warning(f"Invalid or missing X-WordPress-Secret. Access denied.")
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Invalid secret key."
-        )
+        logging.warning("Invalid or missing X-WordPress-Secret.")
+        raise HTTPException(status_code=403, detail="Invalid secret key.")
     
-    # 2. Find or Create User
     user = db.query(models.User).filter(models.User.email == payload.email.lower()).first()
-    
     if not user:
-        # User is logged into WP but not Vylarc. Auto-provision them.
         logging.info(f"Auto-provisioning new Vylarc user from WordPress: {payload.email}")
-        # Create a dummy password hash, as they will only log in via WP
-        hashed_password = security.get_password_hash(f"wp-sso-{uuid.uuid4()}")
+        hashed_password = security.get_password_hash(f"wp-sso-{uuid.uuid4()}")[:MAX_BCRYPT_PASSWORD_BYTES]
         user = models.User(
             email=payload.email.lower(),
             name=payload.name,
             password_hash=hashed_password,
-            credits=models.UserCredits(balance=0), # Start with 0 credits
+            credits=models.UserCredits(balance=0),
             api_keys=models.UserApiKeys()
         )
         try:
             db.add(user)
             db.commit()
             db.refresh(user)
-        except IntegrityError: # Should be rare, but handles race condition
+        except IntegrityError:
             db.rollback()
             user = db.query(models.User).filter(models.User.email == payload.email.lower()).first()
         except Exception as e:
@@ -200,11 +202,6 @@ async def wordpress_sso_login(
             logging.error(f"WP-SSO Auto-provisioning error: {e}")
             raise HTTPException(status_code=500, detail="Could not create user account.")
     
-    if not user:
-         raise HTTPException(status_code=404, detail="User not found.")
-
-    # 3. Generate and return a Vylarc JWT
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = security.create_access_token(data={"sub": str(user.id)}, expires_delta=access_token_expires)
-    
     return {"access_token": access_token, "token_type": "bearer"}
