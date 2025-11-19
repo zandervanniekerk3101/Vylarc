@@ -3,9 +3,9 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Optional
 import time
+import uuid
 
 from src.app import dependencies, models
-from src.app.services import chat_service
 
 router = APIRouter()
 
@@ -20,11 +20,6 @@ class ProjectCreate(BaseModel):
     description: str
     files: List[FileItem] = []
 
-class BuildResponse(BaseModel):
-    status: str
-    logs: List[str]
-    artifact_url: Optional[str] = None
-
 # --- CODING CANVAS ROUTES ---
 
 @router.post("/projects", summary="Create a new Coding Workspace")
@@ -36,7 +31,7 @@ async def create_project(
     # Create Project
     project = models.Project(name=payload.name, description=payload.description, user_id=user.id)
     db.add(project)
-    db.flush()
+    db.flush() # Generate ID
 
     # Add Files
     for f in payload.files:
@@ -57,14 +52,17 @@ async def execute_build(
     user: models.User = Depends(dependencies.get_current_user),
     db: Session = Depends(dependencies.get_db)
 ):
-    project = db.get(models.Project, project_id)
+    # Validate UUID
+    try:
+        p_uuid = uuid.UUID(project_id)
+    except ValueError:
+        raise HTTPException(400, "Invalid Project ID")
+
+    project = db.get(models.Project, p_uuid)
     if not project or project.user_id != user.id:
         raise HTTPException(404, "Project not found")
 
-    # Since we are on Render Free Tier, we cannot spin up Docker containers dynamically.
-    # We will Simulate the build process using the Vylarc "Mock Runner".
-    # In a paid PRO environment, this would trigger a Redis Job for a Docker Worker.
-    
+    # MOCK BUILD SIMULATION (For Render Free Tier)
     logs = [
         "Initializing Vylarc Core Build Environment...",
         "Allocating Sandbox (2 CPU, 1GB RAM)...",
@@ -74,7 +72,6 @@ async def execute_build(
     # Simulate processing files
     for file in project.files:
         logs.append(f"> Compiling {file.filename}...")
-        time.sleep(0.5) # Fake delay
     
     logs.append("Running Tests... [PASS]")
     logs.append("Build Successful. Artifact generated.")
@@ -86,7 +83,7 @@ async def execute_build(
     return {
         "status": "success",
         "logs": logs,
-        "artifact_url": "https://vylarc.com/api/download/mock_artifact.zip" # Mock
+        "artifact_url": "https://vylarc.com/api/download/mock_artifact.zip" 
     }
 
 # --- SMART MAPPING ROUTES ---

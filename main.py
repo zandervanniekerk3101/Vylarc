@@ -10,7 +10,8 @@ from src.app.database import engine
 from src.app.models import models
 # --------------------------------
 
-from src.app.routes import auth, system, credits, chat
+# --- UPDATED IMPORTS: Added 'nexus' ---
+from src.app.routes import auth, system, credits, chat, nexus
 from src.app.config import get_settings
 from src.app.services.credit_service import CreditException
 
@@ -83,6 +84,8 @@ app.include_router(system.router, prefix="/system", tags=["System"])
 app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 app.include_router(credits.router, prefix="/credits", tags=["Credit System"])
 app.include_router(chat.router, prefix="/chat", tags=["Chat System (ChatGPT)"])
+# --- NEW NEXUS ROUTER (Code Canvas + Maps) ---
+app.include_router(nexus.router, prefix="/nexus", tags=["Vylarc Nexus"])
 
 # --- ROOT ---
 @app.get("/", tags=["Root"])
