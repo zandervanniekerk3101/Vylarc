@@ -9,52 +9,76 @@ from src.app.config import get_settings
 
 settings = get_settings()
 
-def get_user_google_creds(user_id: str, db: Session) -> Credentials | None:
-    """Retrieves and refreshes Google Credentials for a user."""
-    db_creds = db.query(models.GoogleCredential).filter(models.GoogleCredential.user_id == user_id).first()
+def get_creds(user_id: str, db: Session) -> Credentials | None:
+    """
+    Retrieves and automatically refreshes Google Credentials.
+    Reads from the OAuthToken table where provider='google'.
+    """
+    # 1. Get User's OAuth Token (Aligned with auth.py)
+    token_record = db.query(models.OAuthToken).filter(
+        models.OAuthToken.user_id == user_id,
+        models.OAuthToken.provider == "google"
+    ).first()
     
-    if not db_creds or not db_creds.refresh_token:
+    if not token_record or not token_record.refresh_token:
+        logging.warning(f"No Google credentials found for user {user_id}")
         return None
 
-    # Decrypt
-    token = security.decrypt_data(db_creds.access_token)
-    refresh = security.decrypt_data(db_creds.refresh_token)
+    # 2. Decrypt
+    access_token = security.decrypt_data(token_record.access_token)
+    refresh_token = security.decrypt_data(token_record.refresh_token)
 
+    if not refresh_token:
+        logging.error(f"Failed to decrypt refresh token for user {user_id}")
+        return None
+
+    # 3. Build Credentials Object
     creds = Credentials(
-        token=token,
-        refresh_token=refresh,
-        token_uri=db_creds.token_uri,
+        token=access_token,
+        refresh_token=refresh_token,
+        token_uri="https://oauth2.googleapis.com/token",
         client_id=settings.GOOGLE_CLIENT_ID,
         client_secret=settings.GOOGLE_CLIENT_SECRET,
-        scopes=db_creds.scopes
+        # These scopes must match what was requested in auth.py
+        scopes=[
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.send", 
+            "https://www.googleapis.com/auth/drive",
+            "https://www.googleapis.com/auth/calendar",
+            "https://www.googleapis.com/auth/spreadsheets"
+        ]
     )
 
-    # Refresh if expired
+    # 4. Refresh if expired
     if creds.expired and creds.refresh_token:
         try:
+            logging.info(f"Refreshing Google Token for {user_id}...")
             creds.refresh(Request())
-            # Save new access token
-            db_creds.access_token = security.encrypt_data(creds.token)
+            
+            # Save new access token back to DB
+            token_record.access_token = security.encrypt_data(creds.token)
             db.commit()
+            
         except Exception as e:
-            logging.error(f"Failed to refresh Google Token for user {user_id}: {e}")
+            logging.error(f"Failed to refresh Google Token: {e}")
             return None
             
     return creds
 
-# --- API FACTORIES ---
+# --- API SERVICE FACTORIES ---
+
 def get_gmail_service(user_id: str, db: Session):
-    creds = get_user_google_creds(user_id, db)
+    creds = get_creds(user_id, db)
     return build('gmail', 'v1', credentials=creds) if creds else None
 
 def get_drive_service(user_id: str, db: Session):
-    creds = get_user_google_creds(user_id, db)
+    creds = get_creds(user_id, db)
     return build('drive', 'v3', credentials=creds) if creds else None
 
 def get_calendar_service(user_id: str, db: Session):
-    creds = get_user_google_creds(user_id, db)
+    creds = get_creds(user_id, db)
     return build('calendar', 'v3', credentials=creds) if creds else None
 
 def get_sheets_service(user_id: str, db: Session):
-    creds = get_user_google_creds(user_id, db)
+    creds = get_creds(user_id, db)
     return build('sheets', 'v4', credentials=creds) if creds else None

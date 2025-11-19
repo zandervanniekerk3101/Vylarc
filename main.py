@@ -5,50 +5,45 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from contextlib import asynccontextmanager
 
-# --- IMPORTS FOR DB AUTO-INIT ---
+# --- DATABASE ---
 from src.app.database import engine
 from src.app.models import models
-# --------------------------------
 
-# --- ROUTES ---
-from src.app.routes import auth, system, credits, chat, nexus
+# --- ROUTES (ALL MODULES) ---
+from src.app.routes import auth, system, credits, chat, nexus, gmail, files, telephony
 from src.app.config import get_settings
 from src.app.services.credit_service import CreditException
 
 # --- LOGGING ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
 settings = get_settings()
 
-# --- LIFESPAN (Auto-Create Tables) ---
+# --- LIFESPAN (Auto-DB Init) ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Runs on server startup.
-    Forces the creation of all database tables if they don't exist.
-    This ensures the new 'projects' and 'map_pins' tables are created immediately.
-    """
     try:
-        logger.info("--- CHECKING DATABASE TABLES ---")
+        logger.info("--- INITIALIZING VYLARC NEURAL CORE ---")
+        logger.info("--- CHECKING DATABASE SCHEMA ---")
+        # This forces creation of all tables (including Projects, MapPins, etc.)
         models.Base.metadata.create_all(bind=engine)
-        logger.info("--- DATABASE TABLES VERIFIED/CREATED SUCCESSFULLY ---")
+        logger.info("--- DATABASE INTEGRITY VERIFIED ---")
     except Exception as e:
-        logger.error(f"--- DATABASE INIT FAILED: {e} ---")
+        logger.error(f"--- CRITICAL DB FAILURE: {e} ---")
     yield
 
-# --- APP ---
+# --- APP SETUP ---
 app = FastAPI(
     title="Vylarc API",
     description="Backend server for the Vylarc AI Productivity Suite.",
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan
 )
 
-# --- CORS (CRITICAL FOR FRONTEND CONNECTIVITY) ---
+# --- CORS (Security Bypass for Frontend) ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # In production, restrict this to your domains
+    allow_origins=["*"], # Allows your WordPress site to connect
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*", "Authorization", "Content-Type", "X-WordPress-Secret"],
@@ -57,39 +52,36 @@ app.add_middleware(
 # --- EXCEPTION HANDLER ---
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    # Pass through standard HTTP exceptions (404, 401, etc)
     if isinstance(exc, (HTTPException, StarletteHTTPException)):
-        return JSONResponse(
-            status_code=exc.status_code,
-            content={"detail": exc.detail},
-        )
-    # Pass through Vylarc Credit exceptions
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    
     if isinstance(exc, CreditException):
-        return JSONResponse(
-            status_code=exc.status_code,
-            content={"detail": exc.detail},
-        )
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
-    # Log unexpected crashes
-    logger.error(f"Unhandled exception for {request.url}: {exc}", exc_info=True)
-    return JSONResponse(
-        status_code=500,
-        content={"detail": f"Internal Server Error: {str(exc)}"},
-    )
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    return JSONResponse(status_code=500, content={"detail": f"Internal Server Error: {str(exc)}"})
 
 # --- REGISTER ROUTERS ---
+# Core Systems
 app.include_router(system.router, prefix="/system", tags=["System"])
 app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 app.include_router(credits.router, prefix="/credits", tags=["Credit System"])
-app.include_router(chat.router, prefix="/chat", tags=["Chat System (ChatGPT)"])
-app.include_router(nexus.router, prefix="/nexus", tags=["Vylarc Nexus"]) # Code Canvas & Maps
+
+# AI Modules
+app.include_router(chat.router, prefix="/chat", tags=["Neural Chat"])
+app.include_router(nexus.router, prefix="/nexus", tags=["Nexus Core (Canvas/Map)"])
+
+# Integration Modules
+app.include_router(gmail.router, prefix="/gmail", tags=["Neural Mail"])
+app.include_router(files.router, prefix="/files", tags=["Drive & Docs"])
+app.include_router(telephony.router, prefix="/call", tags=["Telephony"])
 
 # --- ROOT ---
 @app.get("/", tags=["Root"])
 async def read_root():
     return {
-        "message": "Welcome to the Vylarc API",
-        "docs_url": f"{settings.PUBLIC_BASE_URL}/docs",
+        "message": "Vylarc System Online", 
+        "docs_url": f"{settings.PUBLIC_BASE_URL}/docs"
     }
 
 if __name__ == "__main__":
