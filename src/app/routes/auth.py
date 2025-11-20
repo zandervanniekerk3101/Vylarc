@@ -1,5 +1,6 @@
 import logging
 import uuid
+import os
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, Header
@@ -16,6 +17,10 @@ from src.app.config import get_settings
 from src.app.schemas import user as user_schema
 from src.app.schemas import token as token_schema
 from src.app.utils import security
+
+# --- CRITICAL FIX: Allow Google to expand scopes without crashing ---
+os.environ['OAUTHLIB_RELAX_TOKEN_SCOPE'] = '1'
+# ------------------------------------------------------------------
 
 router = APIRouter()
 settings = get_settings()
@@ -94,35 +99,25 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
 async def read_users_me(current_user: models.User = Depends(dependencies.get_current_user)):
     return {"user": current_user, "credits": current_user.credits}
 
-# --- API KEYS CONFIGURATION (Fixes Settings Module) ---
+# --- API KEYS CONFIGURATION ---
 @router.post("/update-external-keys", response_model=user_schema.ApiKeysPublic)
 async def update_external_keys(
     keys_in: user_schema.ApiKeysUpdate,
     current_user: models.User = Depends(dependencies.get_current_user),
     db: Session = Depends(dependencies.get_db)
 ):
-    """
-    Updates encrypted keys.
-    Handles mapping 'twilio_auth_token' (Schema) -> 'twilio_auth' (DB).
-    """
     api_keys = db.query(models.UserApiKeys).filter(models.UserApiKeys.user_id == current_user.id).first()
     
     if not api_keys:
-        # Auto-create if missing
         api_keys = models.UserApiKeys(user_id=current_user.id)
         db.add(api_keys)
         
-    # Encrypt and Map fields
     if keys_in.twilio_sid:
         api_keys.twilio_sid = security.encrypt_data(keys_in.twilio_sid)
-        
     if keys_in.twilio_auth_token:
-        # CRITICAL FIX: Map schema field 'twilio_auth_token' to DB field 'twilio_auth'
         api_keys.twilio_auth = security.encrypt_data(keys_in.twilio_auth_token)
-        
     if keys_in.elevenlabs_key:
         api_keys.elevenlabs_key = security.encrypt_data(keys_in.elevenlabs_key)
-        
     if keys_in.elevenlabs_voice_id:
         api_keys.elevenlabs_voice_id = keys_in.elevenlabs_voice_id
         
@@ -145,17 +140,19 @@ async def update_external_keys(
 @router.get("/google/login")
 async def google_login(request: Request):
     flow = get_google_flow()
-    auth_url, state = flow.authorization_url(access_type="offline", prompt="consent", include_granted_scopes="true")
+    auth_url, _ = flow.authorization_url(access_type="offline", prompt="consent", include_granted_scopes="true")
     return Response(status_code=307, headers={"Location": auth_url})
 
 @router.get("/google/callback")
 async def google_callback(request: Request, code: str, db: Session = Depends(dependencies.get_db)):
     flow = get_google_flow()
     try:
+        # The os.environ setting at the top prevents crash on scope change
         flow.fetch_token(code=code)
     except Exception as e:
         logging.error(f"Google fetch token error: {e}")
-        raise HTTPException(status_code=400, detail="Invalid Google OAuth code.")
+        # Log the specific error to help debugging but don't crash the whole app
+        raise HTTPException(status_code=400, detail="Invalid Google OAuth code or Scope Mismatch.")
 
     credentials = flow.credentials
     try:
@@ -181,7 +178,7 @@ async def google_callback(request: Request, code: str, db: Session = Depends(dep
         user.api_keys = models.UserApiKeys()
         db.add(user)
 
-    # Store OAuth Tokens (Encrypted)
+    # Store OAuth Tokens
     encrypted_access = security.encrypt_data(credentials.token)
     encrypted_refresh = security.encrypt_data(credentials.refresh_token)
     expires_at = getattr(credentials, "expiry", None)
@@ -213,11 +210,9 @@ async def google_callback(request: Request, code: str, db: Session = Depends(dep
     # Generate Vylarc JWT
     vylarc_jwt = security.create_access_token(data={"sub": str(user.id)}, expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
     
-    # REDIRECT BACK TO VYLARC SITE WITH TOKEN
-    # The frontend will parse ?vylarc_token=... from the URL
+    # Redirect back to WordPress
     redirect_url = f"{settings.PUBLIC_BASE_URL.replace('api.', '')}?vylarc_token={vylarc_jwt}"
     
-    # Fallback if settings URL is localhost
     if "localhost" in settings.PUBLIC_BASE_URL:
         redirect_url = f"http://localhost:3000?vylarc_token={vylarc_jwt}"
         
@@ -228,16 +223,13 @@ class WpLoginPayload(BaseModel):
     email: EmailStr
     name: str | None = None
 
-@router.post("/wp_login", response_model=token_schema.Token, summary="WordPress Bridge Login")
-async def wordpress_sso_login(payload: WpLoginPayload, x_wordpress_secret: str = Header(None), db: Session = Depends(dependencies.get_db)):
-    if not x_wordpress_secret or x_wordpress_secret != settings.WORDPRESS_SECRET_KEY:
-        logging.warning("Invalid or missing X-WordPress-Secret")
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid secret key.")
-
+@router.post("/wp_login", response_model=token_schema.Token)
+async def wp_login(payload: WpLoginPayload, x_wordpress_secret: str = Header(None), db: Session = Depends(dependencies.get_db)):
+    if x_wordpress_secret != settings.WORDPRESS_SECRET_KEY:
+        raise HTTPException(403, "Invalid Secret")
+    
     user = db.query(models.User).filter(models.User.email == payload.email.lower()).first()
-
     if not user:
-        logging.info(f"Auto-provisioning new Vylarc user from WP: {payload.email}")
         hashed_password = security.get_password_hash(f"wp-sso-{uuid.uuid4()}")
         user = models.User(
             email=payload.email.lower(),
@@ -246,19 +238,8 @@ async def wordpress_sso_login(payload: WpLoginPayload, x_wordpress_secret: str =
         )
         user.credits = models.UserCredits(balance=0)
         user.api_keys = models.UserApiKeys()
-        
-        try:
-            db.add(user)
-            db.commit()
-            db.refresh(user)
-        except IntegrityError:
-            db.rollback()
-            user = db.query(models.User).filter(models.User.email == payload.email.lower()).first()
-        except Exception as e:
-            db.rollback()
-            logging.error(f"WP-SSO Auto-provisioning error: {e}")
-            raise HTTPException(status_code=500, detail="Could not create user account.")
-
-    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = security.create_access_token(data={"sub": str(user.id)}, expires_delta=access_token_expires)
-    return {"access_token": access_token, "token_type": "bearer"}
+        db.add(user)
+        db.commit()
+    
+    token = security.create_access_token(data={"sub": str(user.id)}, expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
+    return {"access_token": token, "token_type": "bearer"}
