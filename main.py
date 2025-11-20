@@ -34,15 +34,20 @@ async def lifespan(app: FastAPI):
         # 1. Create Missing Tables (Standard)
         models.Base.metadata.create_all(bind=engine)
         
-        # 2. APPLY PATCHES (The Fix for 'UndefinedColumn')
-        # We manually check and add the 'avatar_url' column if it's missing
+        # 2. APPLY PATCHES (The Fix for 'UndefinedColumn' errors)
+        # We manually check and add missing columns to the 'users' table
         with engine.connect() as conn:
             try:
                 logger.info("--- CHECKING FOR SCHEMA UPDATES ---")
-                # This SQL command adds the column only if it doesn't exist
+                
+                # Patch 1: avatar_url
                 conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url VARCHAR(1024);"))
+                
+                # Patch 2: is_active (The fix for your current error)
+                conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;"))
+                
                 conn.commit()
-                logger.info("--- SCHEMA PATCH APPLIED: avatar_url ---")
+                logger.info("--- SCHEMA PATCHES APPLIED SUCCESSFULLY ---")
             except Exception as e:
                 # If it fails (e.g. already exists in a weird state), just log it
                 logger.warning(f"Schema patch warning (non-critical): {e}")
@@ -56,7 +61,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Vylarc API",
     description="Backend server for the Vylarc AI Productivity Suite.",
-    version="2.1.0",
+    version="2.2.0",
     lifespan=lifespan
 )
 
