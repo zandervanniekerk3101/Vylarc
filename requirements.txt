@@ -16,7 +16,7 @@ python-jose[cryptography]
 cryptography
 email-validator
 
-# Google APIs
+# Google APIs (CRITICAL FOR EMAIL/DRIVE/MAPS)
 google-api-python-client
 google-auth-oauthlib
 google-auth-httplib2
