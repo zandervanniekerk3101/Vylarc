@@ -16,11 +16,15 @@ class User(Base):
     email = Column(String(320), unique=True, nullable=False, index=True)
     password_hash = Column(Text, nullable=True)
     name = Column(String(255))
+    avatar_url = Column(String(1024))
+    is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
+    # Relations
     credits = relationship("UserCredits", uselist=False, back_populates="user", cascade="all, delete-orphan")
     api_keys = relationship("UserApiKeys", uselist=False, back_populates="user", cascade="all, delete-orphan")
+    google_creds = relationship("GoogleCredential", uselist=False, back_populates="user", cascade="all, delete-orphan")
     oauth_tokens = relationship("OAuthToken", back_populates="user", cascade="all, delete-orphan")
     
     # Nexus Relations
@@ -124,7 +128,8 @@ class ErrorLog(Base):
     __tablename__ = "error_logs"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     route = Column(String(255))
-    user_id = Column(UUID(as_uuid=True))
+    # --- FIX APPLIED HERE: Added ForeignKey ---
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
     error_message = Column(Text)
     stack_trace = Column(Text)
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
