@@ -9,38 +9,7 @@ from sqlalchemy.sql import func
 
 Base = declarative_base()
 
-# --- CORE IDENTITY ---
-class User(Base):
-    __tablename__ = "users"
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    email = Column(String(320), unique=True, nullable=False, index=True)
-    password_hash = Column(Text, nullable=True)
-    name = Column(String(255))
-    avatar_url = Column(String(1024))
-    is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-
-    # Relations
-    credits = relationship("UserCredits", uselist=False, back_populates="user", cascade="all, delete-orphan")
-    api_keys = relationship("UserApiKeys", uselist=False, back_populates="user", cascade="all, delete-orphan")
-    google_creds = relationship("GoogleCredential", uselist=False, back_populates="user", cascade="all, delete-orphan")
-    oauth_tokens = relationship("OAuthToken", back_populates="user", cascade="all, delete-orphan")
-    
-    # Nexus Relations
-    projects = relationship("Project", back_populates="user", cascade="all, delete-orphan")
-    map_pins = relationship("MapPin", back_populates="user", cascade="all, delete-orphan")
-    
-    # Logs
-    chat_history = relationship("ChatHistory", back_populates="user", cascade="all, delete-orphan")
-    action_logs = relationship("ActionLog", back_populates="user")
-    error_logs = relationship("ErrorLog", back_populates="user")
-    file_uploads = relationship("FileUpload", back_populates="user", cascade="all, delete-orphan")
-    call_logs = relationship("CallLog", back_populates="user", cascade="all, delete-orphan")
-    billing_records = relationship("BillingRecord", back_populates="user", cascade="all, delete-orphan")
-    documents_cache = relationship("DocumentsCache", back_populates="user", cascade="all, delete-orphan")
-    code_runs = relationship("CodeRun", back_populates="user")
-    maps_queries = relationship("MapsQuery", back_populates="user", cascade="all, delete-orphan")
+# --- DEPENDENT TABLES (Defined First) ---
 
 class UserCredits(Base):
     __tablename__ = "user_credits"
@@ -60,7 +29,19 @@ class UserApiKeys(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     user = relationship("User", back_populates="api_keys")
 
-# --- NEXUS TABLES ---
+class GoogleCredential(Base):
+    __tablename__ = "google_credentials"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), unique=True)
+    access_token = Column(Text)
+    refresh_token = Column(Text)
+    token_uri = Column(String(255), default="https://oauth2.googleapis.com/token")
+    client_id = Column(String(255))
+    client_secret = Column(String(255))
+    scopes = Column(JSONB)
+    expiry = Column(DateTime(timezone=True))
+    user = relationship("User", back_populates="google_creds")
+
 class Project(Base):
     __tablename__ = "projects"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -91,7 +72,6 @@ class MapPin(Base):
     notes = Column(Text)
     user = relationship("User", back_populates="map_pins")
 
-# --- STANDARD TABLES (OAuth, Logs, Files) ---
 class OAuthToken(Base):
     __tablename__ = "oauth_tokens"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -128,8 +108,7 @@ class ErrorLog(Base):
     __tablename__ = "error_logs"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     route = Column(String(255))
-    # --- FIX APPLIED HERE: Added ForeignKey ---
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id")) 
     error_message = Column(Text)
     stack_trace = Column(Text)
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
@@ -202,3 +181,34 @@ class MapsQuery(Base):
     output = Column(JSONB)
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
     user = relationship("User", back_populates="maps_queries")
+
+# --- CORE IDENTITY (Defined Last to resolve relationships) ---
+class User(Base):
+    __tablename__ = "users"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email = Column(String(320), unique=True, nullable=False, index=True)
+    password_hash = Column(Text, nullable=True) 
+    name = Column(String(255))
+    avatar_url = Column(String(1024))
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # Relations
+    credits = relationship("UserCredits", uselist=False, back_populates="user", cascade="all, delete-orphan")
+    api_keys = relationship("UserApiKeys", uselist=False, back_populates="user", cascade="all, delete-orphan")
+    google_creds = relationship("GoogleCredential", uselist=False, back_populates="user", cascade="all, delete-orphan")
+    oauth_tokens = relationship("OAuthToken", back_populates="user", cascade="all, delete-orphan")
+    
+    projects = relationship("Project", back_populates="user", cascade="all, delete-orphan")
+    map_pins = relationship("MapPin", back_populates="user", cascade="all, delete-orphan")
+    
+    chat_history = relationship("ChatHistory", back_populates="user", cascade="all, delete-orphan")
+    action_logs = relationship("ActionLog", back_populates="user")
+    error_logs = relationship("ErrorLog", back_populates="user")
+    file_uploads = relationship("FileUpload", back_populates="user", cascade="all, delete-orphan")
+    call_logs = relationship("CallLog", back_populates="user", cascade="all, delete-orphan")
+    billing_records = relationship("BillingRecord", back_populates="user", cascade="all, delete-orphan")
+    documents_cache = relationship("DocumentsCache", back_populates="user", cascade="all, delete-orphan")
+    code_runs = relationship("CodeRun", back_populates="user")
+    maps_queries = relationship("MapsQuery", back_populates="user", cascade="all, delete-orphan")
