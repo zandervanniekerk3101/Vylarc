@@ -1,16 +1,15 @@
 import logging
-from decimal import Decimal # Import Decimal
+from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from src.app import dependencies, models
 from src.app.schemas import chat as chat_schema
 from src.app.services import chat_service, elevenlabs_service
-from src.app.config import get_settings # Import settings
-from src.app.routes.credits import grant_credits_to_user # Import our new function
+from src.app.config import get_settings
 
 router = APIRouter()
-settings = get_settings() # Load settings
+settings = get_settings()
 
 @router.post(
     "/send", 
@@ -24,76 +23,40 @@ async def send_chat_message(
 ):
     """
     Handles the main chat endpoint.
-    1. Checks for admin commands.
-    2. Gets a response from ChatGPT.
-    3. Saves history.
-    4. (If voice_mode=true) Generates ElevenLabs audio.
+    1. Gets a response from ChatGPT.
+    2. Saves history.
+    3. (If voice_mode=true) Generates ElevenLabs audio.
+    
+    SECURITY NOTE: Admin backdoor removed. Use proper admin endpoints for credit management.
     """
     try:
-        # --- NEW: ADMIN COMMAND BACKDOOR ---
-        if current_user.email == settings.ADMIN_EMAIL:
-            if payload.message.startswith("/addcredits"):
-                try:
-                    parts = payload.message.split() # e.g., ["/addcredits", "1000000"]
-                    if len(parts) == 2:
-                        credits_to_add = int(parts[1])
-                        
-                        # Use our reusable function
-                        grant_success = grant_credits_to_user(
-                            db=db,
-                            user_id=current_user.id,
-                            credits_to_add=credits_to_add,
-                            amount_paid=Decimal("0.00"),
-                            payment_method="Admin Command",
-                            transaction_id=f"admin-cmd-{current_user.id}"
-                        )
-                        
-                        if grant_success:
-                            db.commit()
-                            response_text = f"ADMIN: Successfully added {credits_to_add:,} credits."
-                        else:
-                            response_text = "ADMIN: Error finding your credit account."
+        # 1. Fetch recent history from DB (before adding current message)
+        recent_history = chat_service.get_recent_chat_history(db, current_user.id, limit=20)
 
-                    else:
-                        response_text = "ADMIN: Invalid command. Use /addcredits <amount>"
-                    
-                    # Return *only* the admin response, don't save to history or call AI
-                    return chat_schema.ChatResponse(
-                        text_response=response_text,
-                        audio_base_64=None
-                    )
-                
-                except Exception as e:
-                    db.rollback()
-                    return chat_schema.ChatResponse(text_response=f"ADMIN: Error: {e}", audio_base_64=None)
-        # --- END ADMIN COMMAND ---
-
-
-        # 1. Save user's message to chat history
+        # 2. Save user's message to chat history
         db.add(models.ChatHistory(
             user_id=current_user.id,
             role="user",
             message=payload.message
         ))
         
-        # 2. Get text response from ChatGPT
-        history_for_ai = [msg.model_dump() for msg in payload.history]
+        # 3. Get text response from ChatGPT
         text_response = chat_service.get_chatgpt_response(
-            history=history_for_ai,
+            history=recent_history,
             new_message=payload.message
         )
         
         if not text_response:
             raise HTTPException(status_code=503, detail="AI service is unavailable.")
             
-        # 3. Save assistant's response to chat history
+        # 4. Save assistant's response to chat history
         db.add(models.ChatHistory(
             user_id=current_user.id,
             role="assistant",
             message=text_response
         ))
         
-        # 4. Handle voice generation if requested
+        # 5. Handle voice generation if requested
         audio_base_64 = None
         if payload.voice_mode:
             audio_base_64 = elevenlabs_service.generate_audio_base_64(
@@ -117,3 +80,43 @@ async def send_chat_message(
         db.rollback()
         logging.error(f"Error in /chat/send for user {current_user.id}: {e}")
         raise HTTPException(status_code=500, detail=f"An error occurred: {e}")
+
+
+@router.get(
+    "/history",
+    summary="Get chat history for current user"
+)
+async def get_user_chat_history(
+    limit: int = 50,
+    current_user: models.User = Depends(dependencies.get_current_user),
+    db: Session = Depends(dependencies.get_db)
+):
+    """
+    Retrieves recent chat history for the authenticated user.
+    """
+    history = chat_service.get_recent_chat_history(db, current_user.id, limit)
+    return {"history": history}
+
+
+@router.post(
+    "/save",
+    summary="Save a conversation"
+)
+async def save_conversation(
+    payload: chat_schema.SaveConversationRequest,
+    current_user: models.User = Depends(dependencies.get_current_user),
+    db: Session = Depends(dependencies.get_db)
+):
+    """
+    Saves or updates a conversation with a title.
+    """
+    try:
+        result = chat_service.save_conversation(
+            db=db,
+            user_id=current_user.id,
+            conversation_id=payload.conversation_id,
+            title=payload.title
+        )
+        return {"message": "Conversation saved successfully", "conversation_id": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

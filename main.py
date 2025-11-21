@@ -4,14 +4,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from contextlib import asynccontextmanager
-from sqlalchemy import text # Required for the fix
+from sqlalchemy import text
 
 # --- DATABASE ---
 from src.app.database import engine
 from src.app.models import models
 
 # --- ROUTES ---
-from src.app.routes import auth, system, credits, chat, nexus, gmail, files, telephony
+from src.app.routes import auth, system, credits, chat, nexus, gmail, files, telephony, canvas
 from src.app.config import get_settings
 from src.app.services.credit_service import CreditException
 
@@ -66,9 +66,23 @@ app = FastAPI(
 )
 
 # --- CORS ---
+# SECURITY FIX: Restrict CORS to specific origins instead of allowing all
+# Add your WordPress domain and any other trusted domains here
+allowed_origins = [
+    "https://platform.vylarc.com",
+    "http://localhost:3000",  # For local development
+    "http://localhost:8080",   # Alternative local development port
+]
+
+# Allow any origin that matches platform.vylarc.com or localhost for development
+if settings.PUBLIC_BASE_URL:
+    base_domain = settings.PUBLIC_BASE_URL.replace('//', '//').strip('/')
+    if base_domain and base_domain not in allowed_origins:
+        allowed_origins.append(base_domain)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,  # FIXED: No longer allows all origins
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*", "Authorization", "Content-Type", "X-WordPress-Secret"],
@@ -94,6 +108,7 @@ app.include_router(nexus.router, prefix="/nexus", tags=["Nexus Core"])
 app.include_router(gmail.router, prefix="/gmail", tags=["Email"])
 app.include_router(files.router, prefix="/files", tags=["Drive"])
 app.include_router(telephony.router, prefix="/call", tags=["Telephony"])
+app.include_router(canvas.router, prefix="/canvas", tags=["Coding Canvas"])
 
 @app.get("/", tags=["Root"])
 async def read_root():

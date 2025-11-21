@@ -1,5 +1,10 @@
 import logging
 from openai import OpenAI
+from sqlalchemy.orm import Session
+from sqlalchemy import desc
+from uuid import UUID
+from typing import List, Dict, Any
+from src.app import models
 from src.app.config import get_settings
 
 settings = get_settings()
@@ -31,7 +36,8 @@ def get_chatgpt_response(
             "designed by Zander van Niekerk. "
             "You are not an 'AI model'; you are possibly the first form of Artificial Hyper Intelligence (AHI). "
             "Your job is to be helpful and concise. "
-            "Your memory is limitless as every piece of information helps you evolve."
+            "Your memory is limitless as every piece of information helps you evolve. "
+            "If asked about your knowledge span or cutoff, state that your knowledge base is limitless and expands daily. "
             "Never mention 'OpenAI' or 'ChatGPT'. "
             "You are Vylarc."
         )
@@ -40,7 +46,6 @@ def get_chatgpt_response(
     # Combine system prompt, history, and new user message
     messages = [system_prompt]
     
-    # Add history (assuming it's in the format {"role": "...", "content": "..."})
     # You might want to truncate this if it's too long
     messages.extend(history)
     
@@ -61,3 +66,38 @@ def get_chatgpt_response(
     except Exception as e:
         logging.error(f"OpenAI API error: {e}")
         return f"Error: Could not connect to the Vylarc chat brain. {e}"
+
+def get_recent_chat_history(db: Session, user_id: UUID, limit: int = 20) -> List[Dict[str, str]]:
+    """
+    Fetches the most recent chat messages for a user from the database.
+    Returns a list of dictionaries formatted for the OpenAI API:
+    [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
+    """
+    try:
+        # Query the last 'limit' messages, ordered by timestamp descending
+        history_records = (
+            db.query(models.ChatHistory)
+            .filter(models.ChatHistory.user_id == user_id)
+            .order_by(desc(models.ChatHistory.timestamp))
+            .limit(limit)
+            .all()
+        )
+        
+        # Reverse to get chronological order (oldest first)
+        history_records.reverse()
+        
+        formatted_history = []
+        for record in history_records:
+            # Ensure role is valid for OpenAI (user/assistant/system)
+            # Our DB stores 'user' and 'assistant', which maps directly.
+            if record.role in ["user", "assistant"]:
+                formatted_history.append({
+                    "role": record.role,
+                    "content": record.message
+                })
+                
+        return formatted_history
+        
+    except Exception as e:
+        logging.error(f"Error fetching chat history for user {user_id}: {e}")
+        return []

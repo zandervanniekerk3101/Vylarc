@@ -21,10 +21,12 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str
     GOOGLE_MAPS_API_KEY: str
     
-    # --- THIS IS THE FIX ---
+    # Google Search (For Coding Canvas)
+    GOOGLE_SEARCH_API_KEY: str | None = None
+    GOOGLE_SEARCH_CX: str | None = None
+    
     # Admin Backdoor Email
     ADMIN_EMAIL: str = "noreply@vylarc.com" # Default value if not set
-    # --- END FIX ---
 
     # Google OAuth
     GOOGLE_CLIENT_ID: str
