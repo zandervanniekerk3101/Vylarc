@@ -24,6 +24,7 @@ class UserApiKeys(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), unique=True)
     twilio_sid = Column(Text)
     twilio_auth = Column(Text)
+    twilio_number = Column(String(30))
     elevenlabs_key = Column(Text)
     elevenlabs_voice_id = Column(String(255))
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
