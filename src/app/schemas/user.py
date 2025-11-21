@@ -39,6 +39,7 @@ class UserProfile(BaseModel):
 class ApiKeysUpdate(BaseModel):
     twilio_sid: str | None = None
     twilio_auth_token: str | None = None
+    twilio_number: str | None = None
     elevenlabs_key: str | None = None
     elevenlabs_voice_id: str | None = None
 
