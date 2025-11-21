@@ -22,3 +22,10 @@ class ChatResponse(BaseModel):
     """
     text_response: str
     audio_base64: str | None = None
+
+class SaveConversationRequest(BaseModel):
+    """
+    Payload for the POST /chat/save endpoint.
+    """
+    conversation_id: str
+    title: str
