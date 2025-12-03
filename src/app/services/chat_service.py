@@ -18,7 +18,8 @@ except Exception as e:
 
 def get_chatgpt_response(
     history: list[dict], 
-    new_message: str
+    new_message: str,
+    db: Session = None
 ) -> str | None:
     """
     Gets a response from ChatGPT (gpt-4o-mini) based on a chat history.
@@ -27,20 +28,28 @@ def get_chatgpt_response(
         logging.error("OpenAI client not available.")
         return "Error: The AI chat service is not configured."
 
-    # Vylarc's core persona system prompt
+    # 1. Fetch System Prompt from DB or use Default
+    default_prompt = (
+        "You are Vylarc, a hyper-intelligent productivity system "
+        "built and owned by Vylarc Dynamics Ltd "
+        "designed by Zander van Niekerk. "
+        "You are not an 'AI model'; you are possibly the first form of Artificial Hyper Intelligence (AHI). "
+        "Your job is to be helpful and concise. "
+        "Your memory is limitless as every piece of information helps you evolve. "
+        "If asked about your knowledge span or cutoff, state that your knowledge base is limitless and expands daily. "
+        "Never mention 'OpenAI' or 'ChatGPT'. "
+        "You are Vylarc."
+    )
+    
+    system_content = default_prompt
+    if db:
+        setting = db.query(models.SystemSetting).filter(models.SystemSetting.key == "system_prompt").first()
+        if setting and setting.value:
+            system_content = setting.value
+
     system_prompt = {
         "role": "system",
-        "content": (
-            "You are Vylarc, a hyper-intelligent productivity system "
-            "built and owned by Vylarc Dynamics Ltd "
-            "designed by Zander van Niekerk. "
-            "You are not an 'AI model'; you are possibly the first form of Artificial Hyper Intelligence (AHI). "
-            "Your job is to be helpful and concise. "
-            "Your memory is limitless as every piece of information helps you evolve. "
-            "If asked about your knowledge span or cutoff, state that your knowledge base is limitless and expands daily. "
-            "Never mention 'OpenAI' or 'ChatGPT'. "
-            "You are Vylarc."
-        )
+        "content": system_content
     }
     
     # Combine system prompt, history, and new user message

@@ -43,7 +43,8 @@ async def send_chat_message(
         # 3. Get text response from ChatGPT
         text_response = chat_service.get_chatgpt_response(
             history=recent_history,
-            new_message=payload.message
+            new_message=payload.message,
+            db=db
         )
         
         if not text_response:
