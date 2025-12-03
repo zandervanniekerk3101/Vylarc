@@ -16,26 +16,6 @@ python-jose[cryptography]
 cryptography
 email-validator
 
-"""Python dependencies for Vylarc backend (without Google APIs)."""
-
-# Web Server
-fastapi
-uvicorn[standard]
-gunicorn
-python-multipart
-
-# Database & ORM
-sqlalchemy
-psycopg2-binary
-alembic
-
-# Auth & Security
-passlib[bcrypt]
-bcrypt==4.0.1
-python-jose[cryptography]
-cryptography
-email-validator
-
 # AI Models
 openai
 elevenlabs
