@@ -30,18 +30,6 @@ class UserApiKeys(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     user = relationship("User", back_populates="api_keys")
 
-class GoogleCredential(Base):
-    __tablename__ = "google_credentials"
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), unique=True)
-    access_token = Column(Text)
-    refresh_token = Column(Text)
-    token_uri = Column(String(255), default="https://oauth2.googleapis.com/token")
-    client_id = Column(String(255))
-    client_secret = Column(String(255))
-    scopes = Column(JSONB)
-    expiry = Column(DateTime(timezone=True))
-    user = relationship("User", back_populates="google_creds")
 
 class Project(Base):
     __tablename__ = "projects"
@@ -198,7 +186,6 @@ class User(Base):
     # Relations
     credits = relationship("UserCredits", uselist=False, back_populates="user", cascade="all, delete-orphan")
     api_keys = relationship("UserApiKeys", uselist=False, back_populates="user", cascade="all, delete-orphan")
-    google_creds = relationship("GoogleCredential", uselist=False, back_populates="user", cascade="all, delete-orphan")
     oauth_tokens = relationship("OAuthToken", back_populates="user", cascade="all, delete-orphan")
     
     projects = relationship("Project", back_populates="user", cascade="all, delete-orphan")

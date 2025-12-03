@@ -17,25 +17,18 @@ class Settings(BaseSettings):
     WORDPRESS_SECRET_KEY: str
 
     # API Keys
-    GEMINI_API_KEY: str
+    GEMINI_API_KEY: str | None = None
     OPENAI_API_KEY: str
-    GOOGLE_MAPS_API_KEY: str
-    
-    # Google Search (For Coding Canvas)
-    GOOGLE_SEARCH_API_KEY: str | None = None
-    GOOGLE_SEARCH_CX: str | None = None
-    
+
     # Admin Backdoor Email
     ADMIN_EMAIL: str = "noreply@vylarc.com" # Default value if not set
-
-    # Google OAuth
-    GOOGLE_CLIENT_ID: str
-    GOOGLE_CLIENT_SECRET: str
-    GOOGLE_REDIRECT_URI: str = "/auth/google/callback"
 
     # JWT Settings
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
+    
+    # CORS Settings
+    ALLOWED_ORIGINS: str = "" # Comma separated list of origins
 
     @property
     def FULL_GOOGLE_REDIRECT_URI(self) -> str:

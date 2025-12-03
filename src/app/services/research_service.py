@@ -1,67 +1,48 @@
-import logging
-from googleapiclient.discovery import build
+"""Research helpers for the Coding Canvas.
+
+All Google API usage has been removed. Instead of doing live
+web searches, we simply echo back the user's prompt as
+"research context" so the AI can still generate projects.
+"""
+
 from openai import OpenAI
 from src.app.config import get_settings
 
 settings = get_settings()
 
-# Initialize OpenAI
 try:
     openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
-except Exception as e:
-    logging.error(f"Failed to initialize OpenAI client in research_service: {e}")
+except Exception:
     openai_client = None
 
-def perform_web_search(query: str, num_results: int = 5) -> list[dict]:
-    """
-    Performs a Google Custom Search for the given query.
-    Returns a list of dicts with 'title', 'link', and 'snippet'.
-    """
-    if not settings.GOOGLE_SEARCH_API_KEY or not settings.GOOGLE_SEARCH_CX:
-        logging.warning("Google Search API keys are missing. Skipping deep search.")
-        return []
 
-    try:
-        service = build("customsearch", "v1", developerKey=settings.GOOGLE_SEARCH_API_KEY)
-        res = service.cse().list(q=query, cx=settings.GOOGLE_SEARCH_CX, num=num_results).execute()
-        
-        items = res.get("items", [])
-        results = []
-        for item in items:
-            results.append({
-                "title": item.get("title"),
-                "link": item.get("link"),
-                "snippet": item.get("snippet")
-            })
-        return results
+def perform_web_search(query: str, num_results: int = 5) -> list[dict]:  # noqa: ARG001
+    """Stubbed web search.
 
-    except Exception as e:
-        logging.error(f"Google Search failed: {e}")
-        return []
+    Returns an empty list; we no longer call Google Search.
+    """
 
-def summarize_search_results(query: str, search_results: list[dict]) -> str:
+    return []
+
+
+def summarize_search_results(query: str, search_results: list[dict]) -> str:  # noqa: ARG002
+    """Return a lightweight research summary without external APIs.
+
+    If OpenAI is available, we let it hallucinate a short
+    technical brief from the prompt alone; otherwise we
+    return a static message so the canvas flow still works.
     """
-    Uses OpenAI to summarize the search results into a technical briefing
-    for the coding task.
-    """
-    if not search_results:
-        return "No external research was available for this task."
 
     if not openai_client:
-        return "AI service unavailable for summarization."
-
-    # Prepare context
-    context_text = ""
-    for i, res in enumerate(search_results):
-        context_text += f"Source {i+1}: {res['title']}\nURL: {res['link']}\nSummary: {res['snippet']}\n\n"
+        return (
+            "External research is disabled, but you can still build this "
+            f"project based on the prompt: {query}"
+        )
 
     prompt = (
-        f"You are a technical researcher. The user wants to build: '{query}'.\n"
-        f"Here are some search results relevant to this topic:\n\n"
-        f"{context_text}\n"
-        f"Synthesize this information into a concise technical guide on how to build this project. "
-        f"Focus on libraries, architecture patterns, and key implementation details. "
-        f"Do not write code yet, just the high-level technical approach."
+        "You are a senior technical architect. The user wants to build: "
+        f"'{query}'. Without using live web data, outline a concise "
+        "technical plan: key components, libraries, and steps."
     )
 
     try:
@@ -69,12 +50,13 @@ def summarize_search_results(query: str, search_results: list[dict]) -> str:
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "You are a helpful technical assistant."},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": prompt},
             ],
             temperature=0.5,
         )
         return completion.choices[0].message.content.strip()
-
-    except Exception as e:
-        logging.error(f"Summarization failed: {e}")
-        return "Failed to summarize research results."
+    except Exception:
+        return (
+            "External research is disabled, but you can still build this "
+            f"project based on the prompt: {query}"
+        )

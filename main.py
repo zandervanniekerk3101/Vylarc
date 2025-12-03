@@ -80,6 +80,11 @@ if settings.PUBLIC_BASE_URL:
     if base_domain and base_domain not in allowed_origins:
         allowed_origins.append(base_domain)
 
+# Add origins from environment variable
+if settings.ALLOWED_ORIGINS:
+    env_origins = [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(",") if origin.strip()]
+    allowed_origins.extend(env_origins)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,  # FIXED: No longer allows all origins

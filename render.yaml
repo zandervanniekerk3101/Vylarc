@@ -25,15 +25,9 @@ services:
         sync: false 
       - key: GEMINI_API_KEY
         sync: false 
-      - key: GOOGLE_MAPS_API_KEY
-        sync: false 
       - key: OPENAI_API_KEY
         sync: false 
       - key: PUBLIC_BASE_URL
-        sync: false 
-      - key: GOOGLE_CLIENT_ID
-        sync: false 
-      - key: GOOGLE_CLIENT_SECRET
         sync: false 
       - key: PYTHON_VERSION
         value: 3.11.5

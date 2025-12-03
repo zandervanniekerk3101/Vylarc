@@ -1,13 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request, Header
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import time
 import uuid
+import logging
 
 from src.app import dependencies, models
+from src.app.config import get_settings
 
 router = APIRouter()
+settings = get_settings()
 
 # --- SCHEMAS ---
 class FileItem(BaseModel):
@@ -24,7 +27,6 @@ class MapPinCreate(BaseModel):
     name: str
     lat: float
     lng: float
-    google_place_id: Optional[str] = None
     notes: Optional[str] = None
 
 # --- CODING CANVAS ROUTES ---
@@ -112,7 +114,6 @@ async def save_map_pin(
         name=pin.name,
         lat=pin.lat,
         lng=pin.lng,
-        google_place_id=pin.google_place_id,
         notes=pin.notes
     )
     db.add(new_pin)
@@ -150,3 +151,21 @@ async def list_files(
         })
         
     return {"files": file_list}
+
+# --- WEBHOOKS ---
+
+@router.post("/webhook/woocommerce", summary="WooCommerce Webhook Listener")
+async def woocommerce_webhook(
+    payload: Dict[Any, Any],
+    x_wordpress_secret: str = Header(None)
+):
+    """
+    Receives order events from WooCommerce.
+    """
+    if x_wordpress_secret != settings.WORDPRESS_SECRET_KEY:
+        raise HTTPException(403, "Invalid Secret")
+    
+    logging.info(f"Received WooCommerce Webhook: {payload.get('event')}")
+    # In a real app, we would process the order here (e.g. update credits, trigger AI agent)
+    
+    return {"status": "received"}

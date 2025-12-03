@@ -5,9 +5,9 @@ from pydantic import BaseModel
 from datetime import datetime
 
 from src.app import dependencies, models
-from src.app.services import google_service
 
 router = APIRouter()
+
 
 class FileUploadRequest(BaseModel):
     filename: str
@@ -38,15 +38,13 @@ async def list_files(
         })
     return {"files": output}
 
-@router.post("/upload", summary="Upload to Drive")
+@router.post("/upload", summary="Upload file (local metadata only)")
 async def upload_file(
     payload: FileUploadRequest,
     user: models.User = Depends(dependencies.get_current_user),
     db: Session = Depends(dependencies.get_db)
 ):
-    service = google_service.get_drive_service(user.id, db)
-    
-    # 1. Upload to Google Drive (if connected)
+    # Google Drive upload is disabled; we just store metadata.
     drive_link = None
     file_size = 0
     
@@ -55,18 +53,9 @@ async def upload_file(
         file_data = base64.b64decode(payload.file_base64)
         file_size = len(file_data)
         
-        if service:
-            from googleapiclient.http import MediaIoBaseUpload
-            import io
-            
-            file_metadata = {'name': payload.filename}
-            media = MediaIoBaseUpload(io.BytesIO(file_data), mimetype='application/octet-stream', resumable=True)
-            
-            gfile = service.files().create(body=file_metadata, media_body=media, fields='id, webViewLink').execute()
-            drive_link = gfile.get('webViewLink')
     except Exception as e:
         # Log but continue to save to DB so user sees something
-        print(f"Drive Upload Error: {e}")
+        print(f"File decode error: {e}")
 
     # 2. Save Metadata to Vylarc DB
     db_file = models.FileUpload(
