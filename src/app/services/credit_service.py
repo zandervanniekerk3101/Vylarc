@@ -112,3 +112,57 @@ def check_and_deduct_credits(
     
     # The transaction is committed by the route's context manager
     return credits_locked
+
+def grant_credits_to_user(
+    db: Session,
+    user_id: UUID,
+    credits_to_add: int,
+    amount_paid: float,
+    payment_method: str,
+    transaction_id: str
+) -> bool:
+    """
+    Internal function to add credits and log billing.
+    Returns True on success.
+    """
+    try:
+        logging.info(f"Granting {credits_to_add} credits to user {user_id} via {payment_method}")
+        
+        # 1. Log the billing record
+        new_record = models.BillingRecord(
+            user_id=user_id,
+            credits_added=credits_to_add,
+            amount_paid=amount_paid,
+            payment_method=payment_method,
+            transaction_id=transaction_id
+        )
+        db.add(new_record)
+        
+        # 2. Update user's credit balance (atomically with lock)
+        credits = db.scalar(
+            select(models.UserCredits)
+            .where(models.UserCredits.user_id == user_id)
+            .with_for_update()
+        )
+        
+        if not credits:
+            # Auto-heal: If credit row missing, create it
+            logging.warning(f"Credit row missing for {user_id}, creating now.")
+            credits = models.UserCredits(user_id=user_id, balance=0)
+            db.add(credits)
+            db.flush() # Ensure ID is generated
+
+        new_balance = credits.balance + credits_to_add
+        
+        # Execute Update
+        db.execute(
+            update(models.UserCredits)
+            .where(models.UserCredits.user_id == user_id)
+            .values(balance=new_balance)
+        )
+        
+        return True
+        
+    except Exception as e:
+        logging.error(f"Failed to add credits for user {user_id}: {e}")
+        raise e

@@ -11,80 +11,10 @@ from src.app import dependencies, models
 from src.app.schemas import credits as credits_schema
 from src.app.schemas import core as core_schema
 from src.app.config import get_settings
+from src.app.services import credit_service
 
 router = APIRouter()
 settings = get_settings()
-
-# --- SKU CONFIGURATION ---
-# Mapped according to your Vylarc Project Brief (Source 302)
-SKU_TO_CREDITS = {
-    # Pay-As-You-Go
-    "vylarc_pack_2000": 2000,
-    "vylarc_pack_10000": 10000,
-    "vylarc_pack_30000": 30000,
-    
-    # Subscriptions
-    "vylarc_sub_pro": 10000,      # Pro Tier
-    "vylarc_sub_business": 80000, # Business Tier
-    "vylarc_sub_enterprise": 400000 # Enterprise Tier
-}
-
-# --- HELPER FUNCTION ---
-def grant_credits_to_user(
-    db: Session,
-    user_id: str,
-    credits_to_add: int,
-    amount_paid: Decimal,
-    payment_method: str,
-    transaction_id: str
-) -> bool:
-    """
-    Internal function to add credits and log billing.
-    Returns True on success, returns False if user account missing.
-    """
-    try:
-        logging.info(f"Granting {credits_to_add} credits to user {user_id} via {payment_method}")
-        
-        # 1. Log the billing record
-        new_record = models.BillingRecord(
-            user_id=user_id,
-            credits_added=credits_to_add,
-            amount_paid=amount_paid,
-            payment_method=payment_method,
-            transaction_id=transaction_id
-        )
-        db.add(new_record)
-        
-        # 2. Update user's credit balance (atomically with lock)
-        credits = db.scalar(
-            select(models.UserCredits)
-            .where(models.UserCredits.user_id == user_id)
-            .with_for_update()
-        )
-        
-        if not credits:
-            # Auto-heal: If credit row missing, create it
-            logging.warning(f"Credit row missing for {user_id}, creating now.")
-            credits = models.UserCredits(user_id=user_id, balance=0)
-            db.add(credits)
-            db.flush() # Ensure ID is generated
-
-        new_balance = credits.balance + credits_to_add
-        
-        # Execute Update
-        db.execute(
-            update(models.UserCredits)
-            .where(models.UserCredits.user_id == user_id)
-            .values(balance=new_balance)
-        )
-        
-        # db.commit() is NOT called here, allowing the route to commit everything at once
-        return True
-        
-    except Exception as e:
-        # We don't rollback here because the caller (route) handles the transaction scope
-        logging.error(f"Failed to add credits for user {user_id}: {e}")
-        raise e
 
 # --- ROUTES ---
 
@@ -125,11 +55,11 @@ async def add_credits(
     Used by internal admin panels or manual top-ups.
     """
     try:
-        grant_success = grant_credits_to_user(
+        grant_success = credit_service.grant_credits_to_user(
             db=db,
             user_id=payload.user_id,
             credits_to_add=payload.credits_added,
-            amount_paid=Decimal(payload.amount_paid_decimal),
+            amount_paid=float(payload.amount_paid_decimal),
             payment_method=payload.payment_method,
             transaction_id=payload.transaction_id
         )

@@ -8,9 +8,26 @@ import logging
 
 from src.app import dependencies, models
 from src.app.config import get_settings
+from src.app.services import credit_service
+from sqlalchemy import select
 
 router = APIRouter()
 settings = get_settings()
+
+# --- SKU CONFIGURATION ---
+# Mapped according to your Vylarc Project Brief
+# These keys must match the 'SKU' or 'Product Name' in WooCommerce
+SKU_TO_CREDITS = {
+    # Pay-As-You-Go
+    "vylarc_pack_2000": 2000,
+    "vylarc_pack_10000": 10000,
+    "vylarc_pack_30000": 30000,
+    
+    # Subscriptions
+    "vylarc_sub_pro": 10000,      # Pro Tier
+    "vylarc_sub_business": 80000, # Business Tier
+    "vylarc_sub_enterprise": 400000 # Enterprise Tier
+}
 
 # --- SCHEMAS ---
 class FileItem(BaseModel):
@@ -157,15 +174,74 @@ async def list_files(
 @router.post("/webhook/woocommerce", summary="WooCommerce Webhook Listener")
 async def woocommerce_webhook(
     payload: Dict[Any, Any],
-    x_wordpress_secret: str = Header(None)
+    x_wordpress_secret: str = Header(None),
+    db: Session = Depends(dependencies.get_db)
 ):
     """
-    Receives order events from WooCommerce.
+    Receives order events from WooCommerce and grants credits.
     """
     if x_wordpress_secret != settings.WORDPRESS_SECRET_KEY:
         raise HTTPException(403, "Invalid Secret")
     
-    logging.info(f"Received WooCommerce Webhook: {payload.get('event')}")
-    # In a real app, we would process the order here (e.g. update credits, trigger AI agent)
-    
-    return {"status": "received"}
+    event = payload.get('event')
+    logging.info(f"Received WooCommerce Webhook: {event}")
+
+    if event == 'new_order':
+        email = payload.get('customer_email')
+        order_id = str(payload.get('order_id'))
+        total_paid = float(payload.get('total', 0))
+        items = payload.get('items', [])
+
+        # 1. Find User
+        user = db.scalar(select(models.User).where(models.User.email == email.lower()))
+        if not user:
+            logging.warning(f"WooCommerce Order {order_id}: User {email} not found. Skipping credit grant.")
+            return {"status": "skipped", "reason": "user_not_found"}
+
+        credits_granted = 0
+        
+        # 2. Process Items
+        for item in items:
+            # We check both SKU (if passed) or Name to match our config
+            # The linker sends 'name', we might need to adjust linker to send SKU if possible
+            # For now, we assume the product name might contain the key or we match loosely
+            # Ideally, update the linker to send SKU.
+            
+            # Let's assume the 'name' in WooCommerce matches our keys or we add a mapping here.
+            # For robustness, let's try to match the keys in the item name
+            
+            item_name = item.get('name', '').lower()
+            quantity = int(item.get('quantity', 1))
+            
+            matched_sku = None
+            for key in SKU_TO_CREDITS:
+                if key in item_name: # Simple substring match
+                    matched_sku = key
+                    break
+            
+            if matched_sku:
+                amount = SKU_TO_CREDITS[matched_sku] * quantity
+                credits_granted += amount
+                logging.info(f"Matched item '{item_name}' to {matched_sku}. Granting {amount} credits.")
+
+        # 3. Grant Credits
+        if credits_granted > 0:
+            try:
+                credit_service.grant_credits_to_user(
+                    db=db,
+                    user_id=user.id,
+                    credits_to_add=credits_granted,
+                    amount_paid=total_paid,
+                    payment_method="WooCommerce",
+                    transaction_id=f"wc_{order_id}"
+                )
+                db.commit()
+                logging.info(f"Successfully granted {credits_granted} credits to {email} for Order {order_id}")
+            except Exception as e:
+                db.rollback()
+                logging.error(f"Failed to grant credits for Order {order_id}: {e}")
+                raise HTTPException(500, "Failed to process credits")
+        else:
+            logging.info(f"Order {order_id} contained no credit packages.")
+
+    return {"status": "processed"}
