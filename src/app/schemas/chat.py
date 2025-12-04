@@ -15,6 +15,7 @@ class ChatRequest(BaseModel):
     message: str
     history: List[ChatHistoryMessage] = []
     voice_mode: bool = False
+    thread_id: str | None = None
 
 class ChatResponse(BaseModel):
     """
@@ -29,3 +30,10 @@ class SaveConversationRequest(BaseModel):
     """
     conversation_id: str
     title: str
+
+class SummarizeRequest(BaseModel):
+    """
+    Payload for POST /chat/summarize.
+    """
+    text: str
+    max_points: int = 5

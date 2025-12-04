@@ -71,15 +71,26 @@ class OAuthToken(Base):
     expires_at = Column(DateTime(timezone=True))
     user = relationship("User", back_populates="oauth_tokens")
 
+class ChatThread(Base):
+    __tablename__ = "chat_threads"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
+    name = Column(String(255))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    user = relationship("User", back_populates="chat_threads")
+    messages = relationship("ChatHistory", back_populates="thread")
+
 class ChatHistory(Base):
     __tablename__ = "chat_history"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
+    thread_id = Column(UUID(as_uuid=True), ForeignKey("chat_threads.id", ondelete="SET NULL"), nullable=True)
     role = Column(String(32))
     message = Column(Text)
     voice_base64 = Column(Text)
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
     user = relationship("User", back_populates="chat_history")
+    thread = relationship("ChatThread", back_populates="messages")
 
 class ActionLog(Base):
     __tablename__ = "action_logs"
@@ -198,6 +209,7 @@ class User(Base):
     map_pins = relationship("MapPin", back_populates="user", cascade="all, delete-orphan")
     
     chat_history = relationship("ChatHistory", back_populates="user", cascade="all, delete-orphan")
+    chat_threads = relationship("ChatThread", back_populates="user", cascade="all, delete-orphan")
     action_logs = relationship("ActionLog", back_populates="user")
     error_logs = relationship("ErrorLog", back_populates="user")
     file_uploads = relationship("FileUpload", back_populates="user", cascade="all, delete-orphan")

@@ -34,6 +34,15 @@ async def get_system_version():
     """
     return {"message": "Vylarc API Version 1.0.0"}
 
+@router.get("/features", summary="Get Feature Flags")
+async def get_feature_flags():
+    """Returns server-side feature flags for client UI gating."""
+    return {
+        "enableTelephony": settings.ENABLE_TELEPHONY,
+        "enableVoice": settings.ENABLE_VOICE,
+        "enableGoogle": settings.ENABLE_GOOGLE_INTEGRATIONS,
+    }
+
 # --- ADMIN DASHBOARD ENDPOINTS ---
 
 @router.get("/prompt", summary="Get System Prompt")

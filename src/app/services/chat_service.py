@@ -76,7 +76,7 @@ def get_chatgpt_response(
         logging.error(f"OpenAI API error: {e}")
         return f"Error: Could not connect to the Vylarc chat brain. {e}"
 
-def get_recent_chat_history(db: Session, user_id: UUID, limit: int = 20) -> List[Dict[str, str]]:
+def get_recent_chat_history(db: Session, user_id: UUID, limit: int = 20, thread_id: UUID | None = None) -> List[Dict[str, str]]:
     """
     Fetches the most recent chat messages for a user from the database.
     Returns a list of dictionaries formatted for the OpenAI API:
@@ -84,13 +84,10 @@ def get_recent_chat_history(db: Session, user_id: UUID, limit: int = 20) -> List
     """
     try:
         # Query the last 'limit' messages, ordered by timestamp descending
-        history_records = (
-            db.query(models.ChatHistory)
-            .filter(models.ChatHistory.user_id == user_id)
-            .order_by(desc(models.ChatHistory.timestamp))
-            .limit(limit)
-            .all()
-        )
+        q = db.query(models.ChatHistory).filter(models.ChatHistory.user_id == user_id)
+        if thread_id:
+            q = q.filter(models.ChatHistory.thread_id == thread_id)
+        history_records = q.order_by(desc(models.ChatHistory.timestamp)).limit(limit).all()
         
         # Reverse to get chronological order (oldest first)
         history_records.reverse()
@@ -110,3 +107,16 @@ def get_recent_chat_history(db: Session, user_id: UUID, limit: int = 20) -> List
     except Exception as e:
         logging.error(f"Error fetching chat history for user {user_id}: {e}")
         return []
+
+
+def create_thread(db: Session, user_id: UUID, name: str | None = None) -> models.ChatThread:
+    thread = models.ChatThread(user_id=user_id, name=name or "Untitled")
+    db.add(thread)
+    db.commit()
+    db.refresh(thread)
+    return thread
+
+
+def list_threads(db: Session, user_id: UUID) -> list[dict[str, str]]:
+    rows = db.query(models.ChatThread).filter(models.ChatThread.user_id == user_id).order_by(desc(models.ChatThread.created_at)).all()
+    return [{"id": str(r.id), "name": r.name or "Untitled"} for r in rows]

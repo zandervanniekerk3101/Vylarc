@@ -60,3 +60,43 @@ def summarize_search_results(query: str, search_results: list[dict]) -> str:  # 
             "External research is disabled, but you can still build this "
             f"project based on the prompt: {query}"
         )
+
+
+def summarize_text(text: str, max_points: int = 5) -> str:
+    """
+    Summarize the provided text locally (no external web calls).
+    If OpenAI is configured, generate a concise bullet summary; otherwise return a trimmed fallback.
+    """
+    if not text:
+        return "No content provided to summarize."
+
+    if not openai_client:
+        # Simple local fallback: first max_points sentences/lines
+        lines = [l.strip() for l in text.split('\n') if l.strip()]
+        if not lines:
+            lines = [t.strip() for t in text.split('.') if t.strip()]
+        points = lines[:max_points]
+        return "\n".join([f"- {p}" for p in points])
+
+    prompt = (
+        "Summarize the following content into concise bullet points (" + str(max_points) + " max). "
+        "Focus on key facts and actions.\n\nCONTENT:\n" + text
+    )
+
+    try:
+        completion = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a precise summarizer."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+        )
+        return completion.choices[0].message.content.strip()
+    except Exception:
+        # Local fallback again
+        lines = [l.strip() for l in text.split('\n') if l.strip()]
+        if not lines:
+            lines = [t.strip() for t in text.split('.') if t.strip()]
+        points = lines[:max_points]
+        return "\n".join([f"- {p}" for p in points])

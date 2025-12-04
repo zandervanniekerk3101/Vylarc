@@ -4,9 +4,11 @@ from pydantic import BaseModel
 import requests # Using direct HTTP to avoid heavy Twilio lib dependency if desired
 
 from src.app import dependencies, models
+from src.app.config import get_settings
 from src.app.utils import security
 
 router = APIRouter()
+settings = get_settings()
 
 class CallRequest(BaseModel):
     to_number: str
@@ -18,6 +20,8 @@ async def initiate_call(
     user: models.User = Depends(dependencies.get_current_user),
     db: Session = Depends(dependencies.get_db)
 ):
+    if not settings.ENABLE_TELEPHONY:
+        raise HTTPException(status_code=503, detail="Telephony is disabled by configuration.")
     # 1. Get Keys
     keys = db.query(models.UserApiKeys).filter(models.UserApiKeys.user_id == user.id).first()
     if not keys or not keys.twilio_sid or not keys.twilio_auth:

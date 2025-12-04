@@ -3,15 +3,21 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 from elevenlabs.client import ElevenLabs
 from elevenlabs import Voice, VoiceSettings
+from src.app.config import get_settings
 
 from src.app.models import models
 from src.app.utils import security
+
+settings = get_settings()
 
 def get_decrypted_elevenlabs_key(db: Session, user_id: UUID) -> str | None:
     """
     Fetches and decrypts the user's ElevenLabs API key.
     """
     api_keys = db.get(models.UserApiKeys, {"user_id": user_id})
+    if not settings.ENABLE_VOICE:
+        logging.warning("Voice features are disabled by configuration.")
+        return None
     if not api_keys or not api_keys.elevenlabs_key:
         logging.warning(f"User {user_id} has no ElevenLabs key set.")
         return None
@@ -23,6 +29,9 @@ def get_user_voice_id(db: Session, user_id: UUID) -> str | None:
     Fetches the user's chosen ElevenLabs Voice ID.
     """
     api_keys = db.get(models.UserApiKeys, {"user_id": user_id})
+    if not settings.ENABLE_VOICE:
+        logging.warning("Voice features are disabled by configuration.")
+        return None
     if not api_keys or not api_keys.elevenlabs_voice_id:
         logging.warning(f"User {user_id} has no ElevenLabs Voice ID set.")
         return None

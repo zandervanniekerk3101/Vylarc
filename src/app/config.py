@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     # CORS Settings
     ALLOWED_ORIGINS: str = "" # Comma separated list of origins
 
+    # Feature Flags
+    ENABLE_TELEPHONY: bool = False
+    ENABLE_VOICE: bool = False
+    ENABLE_GOOGLE_INTEGRATIONS: bool = False
+
     @property
     def FULL_GOOGLE_REDIRECT_URI(self) -> str:
         """Constructs the full callback URL for Google OAuth."""

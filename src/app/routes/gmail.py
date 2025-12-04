@@ -5,8 +5,10 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from src.app import dependencies, models
+from src.app.config import get_settings
 
 router = APIRouter()
+settings = get_settings()
 
 
 class EmailSendRequest(BaseModel):
@@ -20,12 +22,11 @@ async def list_emails(
     user: models.User = Depends(dependencies.get_current_user),  # noqa: ARG001
     db: Session = Depends(dependencies.get_db),  # noqa: ARG001
 ):
-    """Email listing via Gmail is no longer supported."""
+    """Email listing via Gmail is disabled or removed."""
 
-    raise HTTPException(
-        status_code=503,
-        detail="Gmail integration has been removed from Vylarc.",
-    )
+    if not settings.ENABLE_GOOGLE_INTEGRATIONS:
+        raise HTTPException(status_code=503, detail="Google integrations are disabled by configuration.")
+    raise HTTPException(status_code=503, detail="Gmail integration has been removed from Vylarc.")
 
 
 @router.post("/send", summary="Send Email (disabled)")
@@ -34,9 +35,8 @@ async def send_email(
     user: models.User = Depends(dependencies.get_current_user),  # noqa: ARG001
     db: Session = Depends(dependencies.get_db),  # noqa: ARG001
 ):
-    """Email sending via Gmail is no longer supported."""
+    """Email sending via Gmail is disabled or removed."""
 
-    raise HTTPException(
-        status_code=503,
-        detail="Gmail integration has been removed from Vylarc.",
-    )
+    if not settings.ENABLE_GOOGLE_INTEGRATIONS:
+        raise HTTPException(status_code=503, detail="Google integrations are disabled by configuration.")
+    raise HTTPException(status_code=503, detail="Gmail integration has been removed from Vylarc.")
