@@ -4,5 +4,8 @@ from .models import (
     UserApiKeys,
     OAuthToken,
     ChatHistory,
-    BillingRecord
+    BillingRecord,
+    SystemSetting,
+    Project,
+    ProjectFile
 )
