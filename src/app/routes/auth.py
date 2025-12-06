@@ -7,6 +7,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, EmailStr
+import requests
 
 from src.app import models, dependencies
 from src.app.config import get_settings
@@ -124,3 +125,79 @@ async def wp_login(payload: WpLoginPayload, x_wordpress_secret: str = Header(Non
     
     token = security.create_access_token(data={"sub": str(user.id)}, expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
     return {"access_token": token, "token_type": "bearer"}
+
+# --- Google Sign-In ---
+class GoogleSignInPayload(BaseModel):
+    id_token: str
+    name: str | None = None
+
+
+@router.post("/google", response_model=token_schema.Token)
+async def google_login(
+    payload: GoogleSignInPayload,
+    db: Session = Depends(dependencies.get_db),
+):
+    """
+    Accepts a Google ID Token from the mobile app, verifies it with Google,
+    upserts a local user, and returns a Vylarc JWT.
+    """
+    try:
+        resp = requests.get(
+            "https://oauth2.googleapis.com/tokeninfo",
+            params={"id_token": payload.id_token},
+            timeout=10,
+        )
+    except requests.RequestException:
+        raise HTTPException(status_code=502, detail="Failed to verify token with Google")
+
+    if resp.status_code != 200:
+        raise HTTPException(status_code=401, detail="Invalid Google token")
+
+    data = resp.json()
+    aud = data.get("aud")
+    email = data.get("email")
+    email_verified_raw = data.get("email_verified")
+    email_verified = str(email_verified_raw).lower() in ("true", "1", "yes")
+    issuer = data.get("iss")
+
+    allowed_audiences = [
+        a.strip() for a in (settings.GOOGLE_OAUTH_CLIENT_IDS or "").split(",") if a.strip()
+    ]
+
+    if allowed_audiences and aud not in allowed_audiences:
+        raise HTTPException(status_code=401, detail="Invalid token audience")
+
+    if issuer not in {"https://accounts.google.com", "accounts.google.com"}:
+        raise HTTPException(status_code=401, detail="Invalid token issuer")
+
+    if not email or not email_verified:
+        raise HTTPException(status_code=401, detail="Email not verified with Google")
+
+    # Upsert user
+    user = db.query(models.User).filter(models.User.email == email.lower()).first()
+    if not user:
+        # Use a generated password; logins will be through Google
+        generated_pw = f"google-{data.get('sub') or email}"
+        user = models.User(
+            email=email.lower(),
+            name=data.get("name") or payload.name,
+            password_hash=security.get_password_hash(generated_pw),
+        )
+        user.credits = models.UserCredits(balance=0)
+        user.api_keys = models.UserApiKeys()
+        try:
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+        except IntegrityError:
+            db.rollback()
+            user = db.query(models.User).filter(models.User.email == email.lower()).first()
+        except Exception as e:
+            db.rollback()
+            raise HTTPException(status_code=500, detail=f"Failed to create user: {e}")
+
+    access_token = security.create_access_token(
+        data={"sub": str(user.id)},
+        expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
+    )
+    return {"access_token": access_token, "token_type": "bearer"}

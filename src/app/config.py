@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     ENABLE_VOICE: bool = False
     ENABLE_GOOGLE_INTEGRATIONS: bool = False
 
+    # Google OAuth
+    # Comma-separated list of allowed OAuth 2.0 Client IDs (audiences)
+    # e.g. the Web client ID(s) used to mint ID tokens on Android/iOS
+    GOOGLE_OAUTH_CLIENT_IDS: str = ""
+
     @property
     def FULL_GOOGLE_REDIRECT_URI(self) -> str:
         """Constructs the full callback URL for Google OAuth."""
