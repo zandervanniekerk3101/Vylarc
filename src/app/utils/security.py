@@ -44,7 +44,18 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     # Must pre-hash the input to match the stored hash logic
     pre_hash = hashlib.sha256(plain_password.encode('utf-8')).hexdigest()
     
-    return pwd_context.verify(pre_hash, hashed_password)
+    # Primary: double-hash verification
+    try:
+        if pwd_context.verify(pre_hash, hashed_password):
+            return True
+    except Exception:
+        pass
+
+    # Fallback: legacy direct bcrypt of plain password (for old accounts)
+    try:
+        return pwd_context.verify(plain_password, hashed_password)
+    except Exception:
+        return False
 
 # --- JWT ---
 SECRET_KEY = settings.FLASK_SECRET_KEY

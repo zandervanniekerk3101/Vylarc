@@ -45,6 +45,9 @@ async def lifespan(app: FastAPI):
                 
                 # Patch 2: is_active (The fix for your current error)
                 conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;"))
+
+                # Patch 3: user_api_keys.twilio_number
+                conn.execute(text("ALTER TABLE user_api_keys ADD COLUMN IF NOT EXISTS twilio_number VARCHAR(30);"))
                 
                 conn.commit()
                 logger.info("--- SCHEMA PATCHES APPLIED SUCCESSFULLY ---")
