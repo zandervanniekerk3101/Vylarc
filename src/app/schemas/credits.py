@@ -33,3 +33,12 @@ class CreditBalanceResponse(BaseModel):
     """
     balance: int
     updated_at: datetime
+
+class UserCreditsResponse(BaseModel):
+    """
+    Response model used by /auth/me where credits details are returned.
+    """
+    user_id: uuid.UUID
+    credits: int
+    plan: str | None = None
+    updated_at: datetime

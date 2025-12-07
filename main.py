@@ -29,6 +29,7 @@ async def lifespan(app: FastAPI):
     2. Patches existing tables with missing columns (Self-Healing).
     """
     try:
+    from sqlalchemy import text
         logger.info("--- INITIALIZING VYLARC NEURAL CORE ---")
         
         # 1. Create Missing Tables (Standard)
@@ -73,6 +74,31 @@ app = FastAPI(
 # Add your WordPress domain and any other trusted domains here
 allowed_origins = [
     "https://platform.vylarc.com",
+                    # Ensure chat_history.thread_id exists for threading and queries
+                    conn.execute(text("""
+                        DO $$
+                        BEGIN
+                            IF NOT EXISTS (
+                                SELECT 1 FROM information_schema.columns 
+                                WHERE table_name = 'chat_history' AND column_name = 'thread_id'
+                            ) THEN
+                                ALTER TABLE chat_history ADD COLUMN thread_id UUID;
+                            END IF;
+                        END $$;
+                    """))
+
+                    # Ensure user_credits.updated_at exists and has a sensible default
+                    conn.execute(text("""
+                        DO $$
+                        BEGIN
+                            IF NOT EXISTS (
+                                SELECT 1 FROM information_schema.columns 
+                                WHERE table_name = 'user_credits' AND column_name = 'updated_at'
+                            ) THEN
+                                ALTER TABLE user_credits ADD COLUMN updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
+                            END IF;
+                        END $$;
+                    """))
     "http://localhost:3000",  # For local development
     "http://localhost:8080",   # Alternative local development port
 ]
